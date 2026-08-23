@@ -1,0 +1,740 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sistema Solar · Eclipses, Mareas y Atmósfera Terrestre</title>
+<style>
+:root{--bg:#05070f;--panel:#0c1120ee;--line:#1e2a4a;--txt:#cfe3ff;--acc:#4da3ff;--dim:#7d93b8}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--bg);color:var(--txt);font-family:'Segoe UI',system-ui,sans-serif;overflow:hidden}
+header{height:52px;display:flex;align-items:center;justify-content:space-between;padding:0 18px;
+ background:linear-gradient(90deg,#0a1024,#0c1120);border-bottom:1px solid var(--line)}
+header h1{font-size:16px;color:#fff;letter-spacing:.5px}
+header small{color:var(--dim)}
+#hideBtn{background:#132242;color:var(--acc);border:1px solid var(--acc);border-radius:6px;
+ padding:6px 12px;cursor:pointer;font-size:12px}
+#app{display:flex;height:calc(100vh - 52px)}
+aside{width:340px;min-width:340px;background:var(--panel);border-right:1px solid var(--line);
+ overflow-y:auto;padding:12px;font-size:12px}
+aside::-webkit-scrollbar{width:6px}aside::-webkit-scrollbar-thumb{background:#24365e;border-radius:3px}
+main{flex:1;position:relative}
+#space{position:absolute;inset:0;width:100%;height:100%;cursor:grab}
+#space.drag{cursor:grabbing}
+h2{font-size:11px;color:var(--acc);text-transform:uppercase;letter-spacing:1px;margin:13px 0 7px;
+ border-bottom:1px solid var(--line);padding-bottom:4px}
+.modes{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.modes button,.nav button{background:#101a33;color:var(--txt);border:1px solid var(--line);
+ border-radius:6px;padding:7px 4px;cursor:pointer;font-size:11px;transition:.2s}
+.modes button:hover,.nav button:hover{border-color:var(--acc)}
+.modes button.active{background:#1a3a6b;border-color:var(--acc);color:#fff}
+.nav{display:grid;grid-template-columns:repeat(3,1fr);gap:5px}
+.nav button.on{background:#1a3a6b;border-color:var(--acc);color:#fff}
+label.chk{display:flex;align-items:center;gap:7px;padding:3px 0;cursor:pointer}
+label.chk input{accent-color:var(--acc)}
+.tele{display:grid;grid-template-columns:1fr auto;gap:4px 10px;background:#0a0f1f;
+ border:1px solid var(--line);border-radius:8px;padding:10px}
+.tele .k{color:var(--dim)}.tele .v{color:#fff;font-weight:600;text-align:right}
+.concept{background:#0a0f1f;border-left:3px solid var(--acc);border-radius:0 6px 6px 0;
+ padding:8px;margin-bottom:8px;line-height:1.45;color:#b9cdf0}
+.concept b{color:#fff}
+#speedRow,#dateRow{display:flex;align-items:center;gap:8px;margin-top:8px}
+input[type=range]{flex:1;accent-color:var(--acc)}
+#dateRow input[type=date]{flex:1;background:#101a33;color:var(--txt);border:1px solid var(--line);
+ border-radius:6px;padding:5px 6px;font-size:11px;color-scheme:dark;font-family:inherit}
+#todayBtn{background:#132242;color:var(--acc);border:1px solid var(--acc);border-radius:6px;
+ padding:5px 10px;cursor:pointer;font-size:11px;white-space:nowrap}
+#graphs{position:absolute;left:10px;right:10px;bottom:10px;display:flex;gap:10px;pointer-events:none}
+.gbox{flex:1;background:#070b16dd;border:1px solid var(--line);border-radius:8px;padding:6px}
+.gbox p{font-size:10px;color:var(--dim);margin-bottom:3px;text-align:center}
+.gbox canvas{width:100%;height:58px;display:block}
+body.hideui aside,body.hideui #graphs{display:none}
+</style>
+</head>
+<body>
+<header>
+ <h1>🌌 Sistema Solar · Eclipses y Dinámica Terrestre <small>· órbitas reales J2000 · fecha real</small></h1>
+ <button id="hideBtn">Ocultar Interfaz (H)</button>
+</header>
+<div id="app">
+<aside>
+ <h2>Navegación (doble clic sobre un planeta)</h2>
+ <div class="nav" id="nav">
+  <button data-t="sys" class="on">☀️ Sistema</button>
+  <button data-t="0">Mercurio</button><button data-t="1">Venus</button>
+  <button data-t="2">🌍 Tierra</button><button data-t="3">Marte</button>
+  <button data-t="4">Júpiter</button><button data-t="5">Saturno</button>
+  <button data-t="6">Urano</button><button data-t="7">Neptuno</button>
+ </div>
+ <p style="color:var(--dim);margin-top:6px">🖱️ Rueda: zoom · Arrastrar: mover · Doble clic: seguir · Pasa el mouse sobre un cuerpo</p>
+
+ <h2 id="fsTitle" style="display:none">Ficha del Planeta</h2>
+ <div class="tele" id="factsheet" style="display:none;margin-bottom:4px"></div>
+
+ <h2>Escenarios (viajan a la Tierra)</h2>
+ <div class="modes">
+  <button data-mode="solar" class="active">☀️ Eclipse Solar Total</button>
+  <button data-mode="lunar">🌕 Eclipse Lunar Total</button>
+  <button data-mode="sizigia">🌊 Marea Viva (Sizigia)</button>
+  <button data-mode="muerta">〰️ Marea Muerta</button>
+ </div>
+ <div id="speedRow">⏱️ <input type="range" id="speed" min="0" max="365" step="1" value="3">
+  <span id="speedVal">3 d/s</span></div>
+ <div id="dateRow">📅 <input type="date" id="dateIn" min="1900-01-01" max="2100-12-31">
+  <button id="todayBtn">Hoy</button></div>
+
+ <h2>Capas de Visualización</h2>
+ <label class="chk"><input type="checkbox" id="ly-shadow" checked> Conos de Sombra (Umbra/Penumbra)</label>
+ <label class="chk"><input type="checkbox" id="ly-bulge" checked> Abultamiento de Mareas</label>
+ <label class="chk"><input type="checkbox" id="ly-plates" checked> Placas Tectónicas</label>
+ <label class="chk"><input type="checkbox" id="ly-incl" checked> Inclinación Lunar (5.14°)</label>
+ <label class="chk"><input type="checkbox" id="ly-gravity" checked> Líneas Gravitacionales</label>
+ <label class="chk"><input type="checkbox" id="ly-moons" checked> Lunas y Órbitas Lunares</label>
+ <label class="chk"><input type="checkbox" id="ly-sats" checked> Satélites Artificiales (Tierra)</label>
+ <label class="chk"><input type="checkbox" id="ly-asteroids" checked> Asteroides (Cinturón + NEO)</label>
+ <label class="chk"><input type="checkbox" id="ly-comets" checked> Cometas con Cola</label>
+ <label class="chk"><input type="checkbox" id="ly-orbits" checked> Órbitas Planetarias</label>
+
+ <h2>Telemetría en Tiempo Real</h2>
+ <div class="tele">
+  <span class="k">Radiación Solar</span><span class="v" id="t-rad">1361 W/m²</span>
+  <span class="k">Δ Temperatura</span><span class="v" id="t-temp">0.0 °C</span>
+  <span class="k">Distancia Tierra-Sol</span><span class="v" id="t-dsun">1.000 UA</span>
+  <span class="k">Distancia Tierra-Luna</span><span class="v" id="t-dmoon">384,400 km</span>
+  <span class="k">Fuerza de Marea</span><span class="v" id="t-tide">100% (Alta)</span>
+  <span class="k">Estrés Tectónico</span><span class="v" id="t-stress">Máximo</span>
+  <span class="k">Deformación Litosfera</span><span class="v" id="t-def">50 cm</span>
+  <span class="k">Tracción planetaria máx.</span><span class="v" id="t-planet">—</span>
+  <span class="k">Cuerpos monitoreados</span><span class="v" id="t-ast">72 asteroides · 2 cometas</span>
+  <span class="k">Fase Lunar</span><span class="v" id="t-phase">Nueva</span>
+  <span class="k">Nodos</span><span class="v" id="t-node">Alineado</span>
+  <span class="k">Zoom</span><span class="v" id="t-zoom">×1.0</span>
+ </div>
+
+ <h2>Conceptos Clave</h2>
+ <div class="concept"><b>Órbitas reales:</b> los planetas siguen <b>elipses keplerianas</b> con elementos
+  orbitales J2000 (JPL) y sus posiciones corresponden a la <b>fecha mostrada</b> (usa el selector 📅).
+  Distancias en escala comprimida (∝ UA<sup>0.55</sup>) y tamaños exagerados con fines didácticos.</div>
+ <div class="concept"><b>Lunas principales:</b> Luna (Tierra), Fobos y Deimos (Marte), Ío, Europa,
+  Ganímedes y Calisto (Júpiter), Encélado, Rea y Titán (Saturno), Miranda, Titania y Oberón (Urano)
+  y Tritón (Neptuno, órbita <b>retrógrada</b>).</div>
+ <div class="concept"><b>Mecánica Tierra-Luna:</b> la alineación Sol-Tierra-Luna amplifica las fuerzas
+  gravitacionales en la corteza. La órbita lunar es excéntrica (e=0.055): en el <b>perigeo</b>
+  (~356,500 km) las mareas son ~18% más fuertes que en el apogeo (~406,700 km). La litosfera sufre
+  deformación elástica de <b>30–50 cm</b>. Acércate a la Tierra para ver conos de sombra,
+  abultamiento de marea y placas tectónicas.</div>
+ <div class="concept"><b>Viento de Eclipse e Ionosfera:</b> la sombra umbral enfría la superficie
+  (gradiente local de presión) y la densidad electrónica ionosférica cae por falta de fotones UV.</div>
+ <div class="concept"><b>Cometas y NEO:</b> Halley (T≈76 años, órbita <b>retrógrada</b>, e=0.967) y
+  Encke (T≈3.3 años) muestran cola iónica anti-solar y cola de polvo curvada. Apophis y Bennu son
+  asteroides cercanos a la Tierra con órbitas excéntricas.</div>
+</aside>
+<main id="main">
+ <canvas id="space"></canvas>
+ <div id="graphs">
+  <div class="gbox"><p>Radiación Solar (W/m²)</p><canvas id="g1"></canvas></div>
+  <div class="gbox"><p>Amplitud de Marea Oceánica (m)</p><canvas id="g2"></canvas></div>
+  <div class="gbox"><p>Marea Sólida Terrestre (cm)</p><canvas id="g3"></canvas></div>
+ </div>
+</main>
+</div>
+
+<script>
+/* ============ base ============ */
+const cv=document.getElementById('space'),ctx=cv.getContext('2d'),main=document.getElementById('main');
+let W,H;
+const RAD=Math.PI/180,TAU=Math.PI*2;
+const DISP=au=>520*Math.pow(au,0.55);                 // escala radial comprimida
+const J2000_MS=946728000000;                          // 2000-01-01 12:00 UTC
+const daysNow=()=> (Date.now()-J2000_MS)/86400000;
+const dateOf=d=>new Date(J2000_MS+d*86400000);
+const SUN_MASS=333000,MOON_MASS=.0123,MOON_AU=.00257;
+const SYN=29.530589,SID=27.321661,ANOM=27.554550,NM_REF=5.26; // meses lunares (d) · Luna nueva 2000-01-06
+const state={day:daysNow(),speed:3,moonOffset:0,nodeRef:{d0:0,n0:0},
+ ly:{shadow:1,bulge:1,plates:1,incl:1,gravity:1,moons:1,sats:1,asteroids:1,comets:1,orbits:1}};
+
+/* Elementos keplerianos J2000 (JPL, aprox. 1800–2050): a(UA), e, L0(°), pw=long. perihelio(°), T(días) */
+const planets=[
+ {n:'Mercurio',el:{a:.38710,e:.20563,L0:252.2503,pw:77.4577,T:87.969},c:'#b5a7a7',wr:4,M:.055,rot:58.65,
+  dia:4879,mass:'3.30×10²³ kg',g:3.7,rotTxt:'58.6 días',temp:'167 °C',nm:0,moons:[]},
+ {n:'Venus',el:{a:.72333,e:.00677,L0:181.9791,pw:131.6024,T:224.701},c:'#e8c468',wr:7,M:.815,rot:-243,
+  dia:12104,mass:'4.87×10²⁴ kg',g:8.9,rotTxt:'243 días (retró.)',temp:'464 °C',nm:0,moons:[]},
+ {n:'Tierra',el:{a:1.00000,e:.01671,L0:100.4645,pw:102.9377,T:365.256},c:'#4da3ff',wr:8,M:1,earth:1,rot:.997,
+  dia:12756,mass:'5.97×10²⁴ kg',g:9.8,rotTxt:'23.9 horas',temp:'15 °C',nm:1,
+  moons:[{n:'Luna',d:30,r:2.6,T:27.32,c:'#c9c9d4',ph:0}]},
+ {n:'Marte',el:{a:1.52371,e:.09339,L0:355.4470,pw:336.0564,T:686.980},c:'#d1603d',wr:5.5,M:.107,rot:1.026,
+  dia:6792,mass:'6.42×10²³ kg',g:3.7,rotTxt:'24.6 horas',temp:'−65 °C',nm:2,
+  moons:[{n:'Fobos',d:10,r:1,T:.319,c:'#a08d80',ph:1},{n:'Deimos',d:14,r:.9,T:1.263,c:'#b7a891',ph:3}]},
+ {n:'Júpiter',el:{a:5.20289,e:.04839,L0:34.3964,pw:14.7285,T:4332.59},c:'#d8a56a',wr:22,M:317.8,rot:.414,
+  dia:142984,mass:'1.90×10²⁷ kg',g:24.8,rotTxt:'9.9 horas',temp:'−110 °C',nm:95,
+  moons:[{n:'Ío',d:32,r:2,T:1.769,c:'#e6d26a',ph:0},{n:'Europa',d:39,r:1.8,T:3.551,c:'#d8cfc0',ph:2},
+         {n:'Ganímedes',d:48,r:2.6,T:7.155,c:'#b8a894',ph:4},{n:'Calisto',d:58,r:2.3,T:16.69,c:'#8f8578',ph:5}]},
+ {n:'Saturno',el:{a:9.53668,e:.05386,L0:49.9542,pw:92.5989,T:10759.2},c:'#e3d2a0',wr:18,M:95.2,ring:1,rot:.444,
+  dia:120536,mass:'5.68×10²⁶ kg',g:10.4,rotTxt:'10.7 horas',temp:'−140 °C',nm:274,
+  moons:[{n:'Encélado',d:38,r:1.1,T:1.370,c:'#e8eefc',ph:1},{n:'Rea',d:46,r:1.4,T:4.518,c:'#ccd3e0',ph:3},
+         {n:'Titán',d:58,r:2.6,T:15.95,c:'#e0b25e',ph:5}]},
+ {n:'Urano',el:{a:19.18916,e:.04726,L0:313.2381,pw:170.9543,T:30688.5},c:'#9fd8dd',wr:11,M:14.5,rot:-.718,
+  dia:51118,mass:'8.68×10²⁵ kg',g:8.9,rotTxt:'17.2 horas (retró.)',temp:'−195 °C',nm:28,
+  moons:[{n:'Miranda',d:16,r:.9,T:1.413,c:'#a8bcc8',ph:0},{n:'Titania',d:24,r:1.5,T:8.706,c:'#bcaa98',ph:2},
+         {n:'Oberón',d:31,r:1.4,T:13.46,c:'#c8ab90',ph:4}]},
+ {n:'Neptuno',el:{a:30.06992,e:.00859,L0:304.8800,pw:44.9648,T:60182},c:'#4f6dd8',wr:11,M:17.1,rot:.671,
+  dia:49528,mass:'1.02×10²⁶ kg',g:11.0,rotTxt:'16.1 horas',temp:'−200 °C',nm:16,
+  moons:[{n:'Tritón',d:20,r:1.7,T:-5.877,c:'#d7e5e8',ph:1}]},
+];
+planets.forEach(p=>{p.T=p.el.T;p.moons.forEach(m=>m.a=m.ph);});
+const E=planets[2];
+
+const belt=[];for(let i=0;i<70;i++){const au=2.1+Math.random()*1.1;
+ belt.push({au,a:Math.random()*TAU,w:TAU/(365.25*Math.pow(au,1.5)),s:.6+Math.random()*1.4});}
+/* NEO y cometas: M0 = anomalía media en J2000 (°) */
+const NEO=[
+ {n:'Apophis',el:{a:.9224,e:.1914,pw:330.6,M0:100,T:323.6},c:'#ff8f6b',s:2.4,trail:[]},
+ {n:'Bennu',el:{a:1.1264,e:.2037,pw:68.3,M0:101.7,T:436.6},c:'#c9b28a',s:2.1,trail:[]}];
+const comets=[
+ {n:'Halley',el:{a:17.83,e:.967,pw:305,M0:65.96,T:27690,retro:1},c:'#bfe9ff',trail:[]},
+ {n:'Encke',el:{a:2.215,e:.848,pw:161.1,M0:-75.3,T:1204},c:'#ffe9b0',trail:[]}];
+comets.forEach(c=>{c.coma=Array.from({length:12},()=>(
+ {r:.6+Math.random()*2.4,a:Math.random()*TAU,f:.5+Math.random()}));});
+/* Periodos reales: ISS 92.9 min · GPS 11h58m · GEO 23h56m (día sidéreo) */
+const SATS=[{n:'ISS (LEO)',d:12,T:.0645,c:'#9ff'},{n:'GPS (MEO)',d:18,T:.4986,c:'#fd9'},{n:'GEO',d:25,T:.9973,c:'#f9f'}];
+
+/* ============ mecánica kepleriana ============ */
+function orbitalPos(el,d){
+ let Mdeg=(el.M0!==undefined?el.M0:el.L0-el.pw)+360/el.T*d;
+ let M=(Mdeg%360)*RAD;if(M>Math.PI)M-=TAU;if(M<-Math.PI)M+=TAU;
+ const e=el.e;let Ea=e<.8?M:Math.PI*(M<0?-1:1);
+ for(let i=0;i<15;i++){const f=Ea-e*Math.sin(Ea)-M;Ea-=f/(1-e*Math.cos(Ea));}
+ const nu=2*Math.atan2(Math.sqrt(1+e)*Math.sin(Ea/2),Math.sqrt(1-e)*Math.cos(Ea/2));
+ const r=el.a*(1-e*Math.cos(Ea));
+ const lam=el.pw*RAD+(el.retro?-nu:nu);
+ return {dx:Math.cos(lam),dy:-Math.sin(lam),r};
+}
+function makePath(el,n){const pts=[];
+ for(let i=0;i<=n;i++){const nu=i/n*TAU,r=el.a*(1-el.e*el.e)/(1+el.e*Math.cos(nu));
+  if(r>42){pts.push(null);continue;}
+  const lam=el.pw*RAD+(el.retro?-nu:nu),R=DISP(r);
+  pts.push([Math.cos(lam)*R,-Math.sin(lam)*R]);}
+ return pts;}
+planets.forEach(p=>p._path=makePath(p.el,128));
+NEO.forEach(o=>o._path=makePath(o.el,160));
+comets.forEach(c=>c._path=makePath(c.el,180));
+function strokePath(pts){ctx.beginPath();let pen=0;
+ for(const q of pts){if(!q){pen=0;continue;}pen?ctx.lineTo(q[0],q[1]):ctx.moveTo(q[0],q[1]);pen=1;}
+ ctx.stroke();}
+let frameCt=0;
+function updatePositions(pushTrail){
+ planets.forEach(p=>{const o=orbitalPos(p.el,state.day);
+  p._au=o.r;p._auPos={x:o.dx*o.r,y:o.dy*o.r};
+  const R=DISP(o.r);p._p={x:o.dx*R,y:o.dy*R};});
+ [...NEO,...comets].forEach(o=>{const q=orbitalPos(o.el,state.day);
+  o._au=q.r;const R=DISP(q.r);o._p={x:q.dx*R,y:q.dy*R};
+  if(pushTrail&&state.speed>0){o.trail.push({x:o._p.x,y:o._p.y});if(o.trail.length>80)o.trail.shift();}});
+}
+updatePositions();
+
+/* ============ cámara ============ */
+let cam={x:0,y:0,scale:.05},targetScale=null,follow=null;
+let stars=[],mm={x:-999,y:-999};
+function fitScale(){return Math.min(W,H)/2/(DISP(30.4)+170);}
+function resize(){W=cv.width=main.clientWidth;H=cv.height=main.clientHeight;
+ stars=Array.from({length:230},()=>({x:Math.random()*W,y:Math.random()*H,r:Math.random()*1.3,
+  o:.15+Math.random()*.7,par:.02+Math.random()*.05,f:.5+Math.random(),p:Math.random()*TAU}));}
+addEventListener('resize',resize);resize();cam.scale=fitScale();
+const toS=(wx,wy)=>({x:(wx-cam.x)*cam.scale+W/2,y:(wy-cam.y)*cam.scale+H/2});
+
+cv.addEventListener('wheel',e=>{e.preventDefault();
+ const f=Math.exp(-e.deltaY*.0013),r=cv.getBoundingClientRect();
+ const mx=e.clientX-r.left,my=e.clientY-r.top;
+ const wx=(mx-W/2)/cam.scale+cam.x,wy=(my-H/2)/cam.scale+cam.y;
+ cam.scale=Math.max(.015,Math.min(40,cam.scale*f));
+ cam.x=wx-(mx-W/2)/cam.scale;cam.y=wy-(my-H/2)/cam.scale;targetScale=null;
+},{passive:false});
+let drag=null;
+cv.addEventListener('mousedown',e=>{drag={x:e.clientX,y:e.clientY};cv.classList.add('drag');});
+addEventListener('mouseup',()=>{drag=null;cv.classList.remove('drag');});
+addEventListener('mousemove',e=>{
+ const r=cv.getBoundingClientRect();mm.x=e.clientX-r.left;mm.y=e.clientY-r.top;
+ if(drag){cam.x-=(e.clientX-drag.x)/cam.scale;
+  cam.y-=(e.clientY-drag.y)/cam.scale;drag={x:e.clientX,y:e.clientY};follow=null;setNav(null);hideSheet();}});
+cv.addEventListener('dblclick',e=>{const r=cv.getBoundingClientRect();
+ const mx=e.clientX-r.left,my=e.clientY-r.top;
+ for(const p of planets){if(p._sx===undefined)continue;
+  if(Math.hypot(mx-p._sx,my-p._sy)<Math.max(12,p.wr*cam.scale+8)){focusPlanet(planets.indexOf(p));return;}}});
+
+function focusPlanet(i){follow=planets[i];targetScale=i===2?2.4:(planets[i].wr>15?.9:2.0);
+ setNav(String(i));showSheet(planets[i]);}
+function focusSys(){follow=null;targetScale=fitScale();setNav('sys');hideSheet();}
+function setNav(t){document.querySelectorAll('#nav button').forEach(b=>b.classList.toggle('on',b.dataset.t===t));}
+document.querySelectorAll('#nav button').forEach(b=>b.onclick=()=>{
+ b.dataset.t==='sys'?focusSys():focusPlanet(+b.dataset.t);});
+
+/* ============ ficha del planeta ============ */
+const fs=document.getElementById('factsheet'),fsTitle=document.getElementById('fsTitle');
+function showSheet(p){
+ fsTitle.style.display='block';fsTitle.textContent='Ficha · '+p.n;fs.style.display='grid';
+ const yrs=p.T/365.25;
+ fs.innerHTML=
+  `<span class="k">Diámetro</span><span class="v">${p.dia.toLocaleString('es')} km</span>`+
+  `<span class="k">Masa</span><span class="v">${p.mass}</span>`+
+  `<span class="k">Gravedad</span><span class="v">${p.g} m/s²</span>`+
+  `<span class="k">Rotación</span><span class="v">${p.rotTxt}</span>`+
+  `<span class="k">Periodo orbital</span><span class="v">${yrs<2?p.T.toFixed(0)+' días':yrs.toFixed(1)+' años'}</span>`+
+  `<span class="k">Temperatura media</span><span class="v">${p.temp}</span>`+
+  `<span class="k">Lunas conocidas</span><span class="v">${p.nm}</span>`+
+  `<span class="k">Excentricidad</span><span class="v">${p.el.e.toFixed(3)}</span>`+
+  `<span class="k">Distancia al Sol</span><span class="v" id="fs-d">—</span>`+
+  `<span class="k">Velocidad orbital</span><span class="v" id="fs-v">—</span>`;
+}
+function hideSheet(){fs.style.display='none';fsTitle.style.display='none';}
+
+/* ============ física Tierra-Luna ============ */
+function moonAnom(){return -state.day*TAU/SID+state.moonOffset;}
+function nodeAngle(){return state.nodeRef.n0+(state.day-state.nodeRef.d0)*.0529538*RAD;}
+function moonDistFactor(){return 1-.0549*Math.cos(TAU*(state.day-5.0)/ANOM);} // excentricidad lunar
+function earthPos(){return E._p;}
+function moonWorldPos(){
+ const ep=E._p,a=moonAnom(),dist=30*moonDistFactor();
+ const off=state.ly.incl?Math.sin(a-nodeAngle())*dist*Math.sin(5.14*RAD)*3:0;
+ return {x:ep.x+Math.cos(a)*dist-off*Math.sin(a),y:ep.y+Math.sin(a)*dist+off*Math.cos(a),dist};
+}
+function syncMoonToDate(){ // fase lunar real para la fecha actual
+ updatePositions();
+ const ep=E._p,sunDir=Math.atan2(-ep.y,-ep.x);
+ const elong=TAU*((((state.day-NM_REF)/SYN)%1)+1)%TAU;
+ state.moonOffset=(sunDir-elong)+state.day*TAU/SID;
+ state.nodeRef={d0:state.day,n0:-(125.04452-.0529538*state.day)*RAD};
+}
+function scenario(kind){
+ updatePositions();
+ const ep=E._p,sunDir=Math.atan2(-ep.y,-ep.x);
+ let target=sunDir;
+ if(kind==='lunar')target=sunDir+Math.PI;
+ if(kind==='muerta')target=sunDir+Math.PI/2;
+ state.moonOffset=target+state.day*TAU/SID;
+ state.nodeRef={d0:state.day,n0:target};
+ focusPlanet(2);targetScale=2.6;
+}
+function solarEclipse(){ // cobertura: línea Sol→Luna vs Tierra
+ const ep=E._p,mp=moonWorldPos();
+ const dm=Math.hypot(mp.x,mp.y),u={x:mp.x/dm,y:mp.y/dm};
+ const w={x:ep.x-mp.x,y:ep.y-mp.y},proj=w.x*u.x+w.y*u.y;
+ if(proj<=0||dm>Math.hypot(ep.x,ep.y))return {cov:0,proj,u,perp:99};
+ const perp=Math.abs(w.x*u.y-w.y*u.x);
+ return {cov:Math.max(0,Math.min(1,1-perp/(E.wr*1.05))),proj,u,perp};
+}
+function lunarEclipse(){
+ const ep=E._p,mp=moonWorldPos(),de=Math.hypot(ep.x,ep.y),v={x:ep.x/de,y:ep.y/de};
+ const w={x:mp.x-ep.x,y:mp.y-ep.y},proj=w.x*v.x+w.y*v.y;
+ if(proj<=0)return 0;
+ const perp=Math.abs(w.x*v.y-w.y*v.x);
+ return Math.max(0,Math.min(1,1-perp/(E.wr*1.1)));
+}
+function planetPull(p){ // marea relativa a la Luna, con distancias reales en UA
+ const dx=p._auPos.x-E._auPos.x,dy=p._auPos.y-E._auPos.y,d2=dx*dx+dy*dy;
+ return (p.M/d2)/(MOON_MASS/(MOON_AU*MOON_AU));
+}
+const phaseNames=['Nueva','Creciente','Cuarto Creciente','Gibosa Creciente','Llena','Gibosa Menguante','Cuarto Menguante','Menguante'];
+function phaseInfo(){
+ const ep=E._p,mp=moonWorldPos();
+ const d=Math.atan2(mp.y-ep.y,mp.x-ep.x)-Math.atan2(-ep.y,-ep.x);
+ let f=((d%TAU)+TAU)%TAU;
+ return {f,syz:Math.abs(Math.cos(d)),name:phaseNames[Math.round(f/(Math.PI/4))%8]};
+}
+syncMoonToDate();
+
+/* ============ detalle visual por planeta ============ */
+function planetDetail(p,px,py,r){
+ ctx.save();ctx.beginPath();ctx.arc(px,py,r,0,7);ctx.clip();
+ const ph1=(((state.day/p.rot)%1)+1)%1,rx=Math.cos(ph1*TAU);
+ if(p.n==='Júpiter'){
+  const cols=['rgba(160,110,70,.32)','rgba(240,222,190,.30)','rgba(190,138,88,.34)','rgba(235,210,175,.26)','rgba(165,115,75,.30)'];
+  cols.forEach((c,i)=>{const y=py-r+(i+.5)*(2*r/cols.length);
+   ctx.fillStyle=c;ctx.fillRect(px-r,y-r*.13,2*r,r*.26);});
+  ctx.fillStyle='rgba(200,88,58,.85)';
+  ctx.beginPath();ctx.ellipse(px+rx*r*.55,py+r*.35,r*.16,r*.10,0,0,7);ctx.fill();
+ }else if(p.n==='Saturno'){
+  ['rgba(200,175,120,.22)','rgba(240,228,190,.20)','rgba(190,165,115,.22)'].forEach((c,i)=>{
+   const y=py-r+(i+.5)*(2*r/3);ctx.fillStyle=c;ctx.fillRect(px-r,y-r*.18,2*r,r*.36);});
+ }else if(p.n==='Marte'){
+  ctx.fillStyle='rgba(255,255,255,.75)';
+  ctx.beginPath();ctx.ellipse(px,py-r*.78,r*.34,r*.15,0,0,7);ctx.fill();
+  ctx.fillStyle='rgba(90,48,30,.35)';
+  ctx.beginPath();ctx.ellipse(px+rx*r*.4,py+r*.15,r*.42,r*.22,-.3,0,7);ctx.fill();
+ }else if(p.n==='Venus'){
+  ctx.strokeStyle='rgba(255,255,255,.16)';ctx.lineWidth=r*.14;
+  ctx.beginPath();ctx.moveTo(px-r,py-r*.3);ctx.quadraticCurveTo(px+rx*r*.5,py,px+r,py-r*.45);ctx.stroke();
+  ctx.beginPath();ctx.moveTo(px-r,py+r*.45);ctx.quadraticCurveTo(px-rx*r*.5,py+r*.15,px+r,py+r*.3);ctx.stroke();
+ }else if(p.n==='Mercurio'){
+  ctx.fillStyle='rgba(0,0,0,.25)';
+  [[.3,-.25,.18],[-.35,.2,.14],[.05,.45,.11]].forEach(q=>{
+   ctx.beginPath();ctx.arc(px+q[0]*r,py+q[1]*r,q[2]*r,0,7);ctx.fill();});
+ }else if(p.n==='Urano'){
+  ctx.fillStyle='rgba(255,255,255,.10)';ctx.fillRect(px-r,py-r*.25,2*r,r*.5);
+ }else if(p.n==='Neptuno'){
+  ctx.fillStyle='rgba(255,255,255,.10)';ctx.fillRect(px-r,py-r*.4,2*r,r*.3);
+  ctx.fillStyle='rgba(20,30,90,.5)';
+  ctx.beginPath();ctx.ellipse(px+rx*r*.45,py+r*.25,r*.2,r*.12,0,0,7);ctx.fill();
+ }
+ ctx.restore();
+}
+function drawRings(p,px,py,r,front){ // anillos de Saturno con hueco de Cassini
+ const rot=-.45,seg=front?[0,Math.PI]:[Math.PI,TAU];
+ [[1.42,.20,'rgba(184,166,120,.85)'],[1.72,.10,'rgba(120,105,75,.5)'],[2.0,.24,'rgba(203,185,138,.75)']]
+ .forEach(b=>{ctx.strokeStyle=b[2];ctx.lineWidth=r*b[1];
+  ctx.beginPath();ctx.ellipse(px,py,r*b[0],r*b[0]*.33,rot,seg[0],seg[1]);ctx.stroke();});
+}
+
+/* ============ dibujo ============ */
+let best={rel:0,n:''};
+function draw(dt,now){
+ ctx.setTransform(1,0,0,1,0,0);
+ ctx.fillStyle='#05070f';ctx.fillRect(0,0,W,H);
+ stars.forEach(s=>{
+  ctx.globalAlpha=s.o*(.7+.3*Math.sin(now*.0012*s.f+s.p));
+  let x=s.x-cam.x*cam.scale*s.par,y=s.y-cam.y*cam.scale*s.par;
+  x=((x%W)+W)%W;y=((y%H)+H)%H;
+  ctx.fillStyle='#fff';ctx.fillRect(x,y,s.r,s.r);});
+ ctx.globalAlpha=1;
+
+ ctx.setTransform(cam.scale,0,0,cam.scale,W/2-cam.x*cam.scale,H/2-cam.y*cam.scale);
+ const lw=x=>x/cam.scale;
+
+ // órbitas planetarias (elipses reales)
+ if(state.ly.orbits){ctx.strokeStyle='#1b2a4d';ctx.lineWidth=lw(.8);
+  planets.forEach(p=>strokePath(p._path));}
+
+ // cinturón
+ if(state.ly.asteroids){ctx.fillStyle='#8a8f9c';
+  belt.forEach(b=>{ctx.globalAlpha=.65;
+   const R=DISP(b.au);ctx.fillRect(Math.cos(b.a)*R,Math.sin(b.a)*R,Math.max(b.s,lw(1.4)),Math.max(b.s,lw(1.4)));});
+  ctx.globalAlpha=1;}
+
+ // NEO
+ if(state.ly.asteroids){NEO.forEach(o=>{
+  if(state.ly.orbits){ctx.strokeStyle='#5a3a2e';ctx.lineWidth=lw(.7);strokePath(o._path);}
+  drawTrail(o.trail,o.c);
+  ctx.fillStyle=o.c;ctx.beginPath();ctx.arc(o._p.x,o._p.y,Math.max(o.s,lw(2)),0,7);ctx.fill();
+ });}
+
+ // cometas: doble cola (iónica anti-solar + polvo curvada)
+ if(state.ly.comets){comets.forEach(c=>{
+  if(state.ly.orbits){ctx.strokeStyle='#20404f';ctx.lineWidth=lw(.7);strokePath(c._path);}
+  drawTrail(c.trail,c.c);
+  const x=c._p.x,y=c._p.y,r=c._au;
+  if(r<9){
+   const d=Math.hypot(x,y),ux=x/d,uy=y/d;
+   const L=Math.max(6,Math.min(240,220/Math.pow(r,1.5)));
+   let g=ctx.createLinearGradient(x,y,x+ux*L,y+uy*L); // cola iónica
+   g.addColorStop(0,c.c+'cc');g.addColorStop(1,'transparent');
+   ctx.fillStyle=g;ctx.beginPath();
+   ctx.moveTo(x-uy*2.5,y+ux*2.5);ctx.lineTo(x+ux*L+uy*L*.18,y+uy*L-ux*L*.18);
+   ctx.lineTo(x+ux*L-uy*L*.18,y+uy*L+ux*L*.18);ctx.lineTo(x+uy*2.5,y-ux*2.5);
+   ctx.closePath();ctx.fill();
+   // cola de polvo: se curva contra el sentido del movimiento
+   const sgn=c.el.retro?-1:1,ca=Math.cos(sgn*.45),sa=Math.sin(sgn*.45);
+   const ex=ux*ca-uy*sa,ey=ux*sa+uy*ca,Ld=L*.75;
+   const tx=x+ex*Ld,ty=y+ey*Ld;
+   g=ctx.createLinearGradient(x,y,tx,ty);
+   g.addColorStop(0,'rgba(255,240,205,.55)');g.addColorStop(1,'transparent');
+   ctx.fillStyle=g;ctx.beginPath();
+   ctx.moveTo(x-uy*2,y+ux*2);
+   ctx.quadraticCurveTo(x+ux*Ld*.55,y+uy*Ld*.55,tx-ey*Ld*.1,ty+ex*Ld*.1);
+   ctx.lineTo(tx+ey*Ld*.1,ty-ex*Ld*.1);
+   ctx.quadraticCurveTo(x+ux*Ld*.45,y+uy*Ld*.45,x+uy*2,y-ux*2);
+   ctx.closePath();ctx.fill();
+   // coma (partículas)
+   ctx.fillStyle='rgba(255,255,255,.35)';
+   const spread=2.5*(9-r)/9+.8;
+   c.coma.forEach(q=>{const a=q.a+now*.0004*q.f;
+    ctx.beginPath();ctx.arc(x+Math.cos(a)*q.r*spread,y+Math.sin(a)*q.r*spread,Math.max(.5,lw(.8)),0,7);ctx.fill();});
+  }
+  ctx.fillStyle='#fff';ctx.beginPath();ctx.arc(x,y,Math.max(2.2,lw(1.8)),0,7);ctx.fill();
+ });}
+
+ // líneas gravitacionales hacia la Tierra
+ const ep=E._p;best={rel:0,n:''};
+ if(state.ly.gravity){
+  planets.forEach(p=>{if(p.earth)return;
+   const rel=planetPull(p);if(rel>best.rel)best={rel,n:p.n};
+   const al=Math.max(.05,Math.min(.8,.08+Math.log10(1+rel*100)*.42));
+   ctx.globalAlpha=al;ctx.strokeStyle=p.c;ctx.lineWidth=lw(.8+Math.min(2.4,rel*2.4));
+   ctx.setLineDash([lw(6),lw(5)]);
+   ctx.beginPath();ctx.moveTo(p._p.x,p._p.y);ctx.lineTo(ep.x,ep.y);ctx.stroke();ctx.setLineDash([]);
+  });
+  ctx.globalAlpha=1;
+  ctx.strokeStyle='#ffcc44';ctx.globalAlpha=.5;ctx.lineWidth=lw(1.6);ctx.setLineDash([lw(4),lw(4)]);
+  ctx.beginPath();ctx.moveTo(0,0);ctx.lineTo(ep.x,ep.y);ctx.stroke();
+  ctx.strokeStyle='#9fd8ff';
+  const mp0=moonWorldPos();ctx.beginPath();ctx.moveTo(mp0.x,mp0.y);ctx.lineTo(ep.x,ep.y);ctx.stroke();
+  ctx.setLineDash([]);ctx.globalAlpha=1;
+ }
+
+ // ===== Sol animado =====
+ const coreR=Math.max(40,6/cam.scale);
+ const pulse=1+.035*Math.sin(now*.0012);
+ let g=ctx.createRadialGradient(0,0,coreR*.2,0,0,coreR*3.6*pulse);
+ g.addColorStop(0,'#fff7c0');g.addColorStop(.3,'#ffcc4488');g.addColorStop(1,'transparent');
+ ctx.fillStyle=g;ctx.beginPath();ctx.arc(0,0,coreR*3.6*pulse,0,7);ctx.fill();
+ ctx.fillStyle='rgba(255,210,110,.06)';                       // rayos giratorios
+ const rot0=now*.00006;
+ for(let i=0;i<14;i++){const a=rot0+i/14*TAU,Lr=coreR*(2.4+.7*Math.sin(now*.001+i*1.7));
+  ctx.beginPath();
+  ctx.moveTo(Math.cos(a-.07)*coreR,Math.sin(a-.07)*coreR);
+  ctx.lineTo(Math.cos(a)*Lr,Math.sin(a)*Lr);
+  ctx.lineTo(Math.cos(a+.07)*coreR,Math.sin(a+.07)*coreR);
+  ctx.closePath();ctx.fill();}
+ g=ctx.createRadialGradient(-coreR*.25,-coreR*.25,coreR*.1,0,0,coreR);
+ g.addColorStop(0,'#fff2b0');g.addColorStop(.7,'#ffdd66');g.addColorStop(1,'#f0a030');
+ ctx.fillStyle=g;ctx.beginPath();ctx.arc(0,0,coreR,0,7);ctx.fill();
+ if(coreR*cam.scale>55){                                      // protuberancias al acercarse
+  ctx.strokeStyle='rgba(255,140,70,.7)';ctx.lineWidth=coreR*.045;
+  for(let i=0;i<3;i++){const a=now*.0001+i*2.1;
+   const x1=Math.cos(a)*coreR,y1=Math.sin(a)*coreR,x2=Math.cos(a+.28)*coreR,y2=Math.sin(a+.28)*coreR;
+   const cx=Math.cos(a+.14)*coreR*(1.3+.12*Math.sin(now*.002+i)),cy=Math.sin(a+.14)*coreR*(1.3+.12*Math.sin(now*.002+i));
+   ctx.beginPath();ctx.moveTo(x1,y1);ctx.quadraticCurveTo(cx,cy,x2,y2);ctx.stroke();}
+ }
+
+ // ===== planetas + lunas =====
+ planets.forEach(p=>{
+  const px=p._p.x,py=p._p.y;
+  const rDraw=Math.max(p.wr,2.4/cam.scale);
+  const aSun=Math.atan2(-py,-px);
+  g=ctx.createRadialGradient(px+Math.cos(aSun)*rDraw*.45,py+Math.sin(aSun)*rDraw*.45,rDraw*.1,px,py,rDraw);
+  g.addColorStop(0,'#ffffff');g.addColorStop(.3,p.c);g.addColorStop(1,'#0a0d18');
+  if(p.ring)drawRings(p,px,py,rDraw,0);
+  ctx.fillStyle=g;ctx.beginPath();ctx.arc(px,py,rDraw,0,7);ctx.fill();
+  if(p.wr*cam.scale>16)planetDetail(p,px,py,rDraw);
+  ctx.fillStyle='rgba(4,8,20,.5)';                            // terminador (lado nocturno)
+  ctx.beginPath();ctx.arc(px,py,rDraw,aSun+Math.PI/2,aSun+Math.PI*1.5);ctx.closePath();ctx.fill();
+  if(p.ring)drawRings(p,px,py,rDraw,1);
+
+  if(state.ly.moons&&!p.earth&&p.wr*cam.scale>5){
+   p.moons.forEach(m=>{
+    if(state.ly.orbits){ctx.strokeStyle='#26365c';ctx.lineWidth=lw(.6);
+     ctx.beginPath();ctx.arc(px,py,m.d,0,7);ctx.stroke();}
+    const mx=px+Math.cos(m.a)*m.d,my=py+Math.sin(m.a)*m.d;m._p={x:mx,y:my};
+    ctx.fillStyle=m.c;ctx.beginPath();ctx.arc(mx,my,Math.max(m.r,lw(1)),0,7);ctx.fill();
+   });
+  }
+ });
+
+ /* ---- detalle Tierra (zoom cercano) ---- */
+ const zoomed=cam.scale>0.5;
+ const ph=phaseInfo(),se=solarEclipse(),le=lunarEclipse(),mf=moonDistFactor();
+ const mp=moonWorldPos();E.moons[0]._p={x:mp.x,y:mp.y};
+ if(zoomed){
+  const angSun=Math.atan2(-ep.y,-ep.x),tf=Math.pow(1/mf,3);
+  const bulge=state.ly.bulge?(.14*ph.syz+.04)*tf:0;
+
+  // conos de sombra
+  if(state.ly.shadow){
+   const de=Math.hypot(ep.x,ep.y),v={x:ep.x/de,y:ep.y/de};
+   ctx.fillStyle='rgba(5,10,30,.5)'; // sombra terrestre
+   ctx.beginPath();
+   ctx.moveTo(ep.x-v.y*E.wr,ep.y+v.x*E.wr);
+   ctx.lineTo(ep.x+v.x*130-v.y*E.wr*.3,ep.y+v.y*130+v.x*E.wr*.3);
+   ctx.lineTo(ep.x+v.x*130+v.y*E.wr*.3,ep.y+v.y*130-v.x*E.wr*.3);
+   ctx.lineTo(ep.x+v.y*E.wr,ep.y-v.x*E.wr);ctx.closePath();ctx.fill();
+   if(se.proj>0&&Math.hypot(mp.x,mp.y)<de){ // umbra/penumbra lunar
+    ctx.fillStyle='rgba(0,0,10,.75)';
+    ctx.beginPath();
+    ctx.moveTo(mp.x-se.u.y*2.6,mp.y+se.u.x*2.6);
+    ctx.lineTo(mp.x+se.u.x*se.proj*1.12,mp.y+se.u.y*se.proj*1.12);
+    ctx.lineTo(mp.x+se.u.y*2.6,mp.y-se.u.x*2.6);ctx.closePath();ctx.fill();
+    ctx.fillStyle='rgba(20,25,60,.25)';
+    ctx.beginPath();
+    ctx.moveTo(mp.x-se.u.y*2.6,mp.y+se.u.x*2.6);
+    ctx.lineTo(mp.x+se.u.x*se.proj*1.5-se.u.y*E.wr*2.2,mp.y+se.u.y*se.proj*1.5+se.u.x*E.wr*2.2);
+    ctx.lineTo(mp.x+se.u.x*se.proj*1.5+se.u.y*E.wr*2.2,mp.y+se.u.y*se.proj*1.5-se.u.x*E.wr*2.2);
+    ctx.lineTo(mp.x+se.u.y*2.6,mp.y-se.u.x*2.6);ctx.closePath();ctx.fill();
+   }
+  }
+
+  // Tierra detallada
+  ctx.save();ctx.translate(ep.x,ep.y);ctx.rotate(angSun);ctx.scale(1+bulge,1-bulge*.45);
+  if(state.ly.bulge){ctx.fillStyle='rgba(60,140,255,.25)';
+   ctx.beginPath();ctx.arc(0,0,E.wr*1.16,0,7);ctx.fill();}
+  g=ctx.createRadialGradient(-E.wr*.3,-E.wr*.3,2,0,0,E.wr);
+  g.addColorStop(0,'#7ec8ff');g.addColorStop(.4,'#2f7fd4');g.addColorStop(1,'#0a2547');
+  ctx.fillStyle=g;ctx.beginPath();ctx.arc(0,0,E.wr,0,7);ctx.fill();
+  if(state.ly.plates){
+   ctx.strokeStyle=ph.syz>.75?'#ff6a3d':'#e8a44d';ctx.lineWidth=lw(1.1);
+   ctx.shadowColor='#ff5030';ctx.shadowBlur=ph.syz>.75?8:0;
+   ctx.beginPath();ctx.moveTo(-E.wr*.8,-E.wr*.3);ctx.quadraticCurveTo(0,E.wr*.25,E.wr*.85,-E.wr*.15);ctx.stroke();
+   ctx.beginPath();ctx.moveTo(-E.wr*.4,E.wr*.85);ctx.quadraticCurveTo(E.wr*.2,0,-E.wr*.2,-E.wr*.85);ctx.stroke();
+   ctx.shadowBlur=0;
+  }
+  ctx.fillStyle='rgba(3,6,20,.55)'; // lado nocturno
+  ctx.beginPath();ctx.arc(0,0,E.wr*1.001,Math.PI/2,Math.PI*1.5);ctx.closePath();ctx.fill();
+  g=ctx.createRadialGradient(0,0,E.wr*.8,0,0,E.wr*1.35); // atmósfera
+  g.addColorStop(0,'transparent');g.addColorStop(.7,'rgba(90,170,255,.28)');g.addColorStop(1,'transparent');
+  ctx.fillStyle=g;ctx.beginPath();ctx.arc(0,0,E.wr*1.35,0,7);ctx.fill();
+  ctx.restore();
+
+  // satélites artificiales
+  if(state.ly.sats){SATS.forEach(s=>{
+   ctx.strokeStyle='#2c3f6b';ctx.lineWidth=lw(.5);
+   ctx.beginPath();ctx.arc(ep.x,ep.y,s.d,0,7);ctx.stroke();
+   const a=state.day/s.T*TAU;
+   ctx.fillStyle=s.c;ctx.beginPath();ctx.arc(ep.x+Math.cos(a)*s.d,ep.y+Math.sin(a)*s.d,Math.max(1,lw(.9)),0,7);ctx.fill();
+  });}
+
+  // órbita lunar
+  if(state.ly.moons&&state.ly.orbits){ctx.strokeStyle='#26365c';ctx.lineWidth=lw(.6);
+   ctx.beginPath();ctx.arc(ep.x,ep.y,mp.dist,0,7);ctx.stroke();}
+
+  // Luna: mitad iluminada hacia el Sol + enrojecimiento gradual en eclipse lunar
+  const aSunM=Math.atan2(-mp.y,-mp.x);
+  ctx.save();ctx.translate(mp.x,mp.y);ctx.rotate(aSunM);
+  ctx.fillStyle='#3a3a48';ctx.beginPath();ctx.arc(0,0,2.6,0,7);ctx.fill();
+  const lr=Math.round(214-35*le),lg=Math.round(214-145*le),lb=Math.round(226-180*le);
+  ctx.fillStyle=`rgb(${lr},${lg},${lb})`;
+  ctx.beginPath();ctx.arc(0,0,2.6,-Math.PI/2,Math.PI/2);ctx.closePath();ctx.fill();
+  ctx.fillStyle='rgba(255,255,255,.35)';
+  ctx.beginPath();ctx.arc(1.1,-.6,.8,0,7);ctx.fill();
+  ctx.restore();
+
+  // corona solar visible durante la totalidad
+  if(se.cov>.85){
+   const t=(se.cov-.85)/.15;
+   g=ctx.createRadialGradient(mp.x,mp.y,2.4,mp.x,mp.y,11);
+   g.addColorStop(0,`rgba(238,242,255,${.85*t})`);
+   g.addColorStop(.35,`rgba(205,218,255,${.32*t})`);
+   g.addColorStop(1,'transparent');
+   ctx.fillStyle=g;ctx.beginPath();ctx.arc(mp.x,mp.y,11,0,7);ctx.fill();
+  }
+ }
+
+ /* ---- etiquetas y tooltip (espacio de pantalla) ---- */
+ ctx.setTransform(1,0,0,1,0,0);
+ let hov=null,hd=16;
+ const consider=(name,wx,wy,info)=>{const s=toS(wx,wy);
+  const d=Math.hypot(mm.x-s.x,mm.y-s.y);if(d<hd){hd=d;hov={name,info,x:s.x,y:s.y};}};
+ ctx.textAlign='center';
+ planets.forEach(p=>{const s=toS(p._p.x,p._p.y);p._sx=s.x;p._sy=s.y;
+  consider(p.n,p._p.x,p._p.y,`${p._au.toFixed(3)} UA del Sol`);
+  if(s.x<-40||s.x>W+40||s.y<-40||s.y>H+40)return;
+  ctx.fillStyle='#9fb4d8';ctx.font='11px Segoe UI';
+  ctx.fillText(p.n,s.x,s.y-Math.max(p.wr*cam.scale,3)-7);
+  if(state.ly.moons&&cam.scale>.9&&p.wr*cam.scale>26){
+   ctx.font='9px Segoe UI';ctx.fillStyle='#6d82a8';
+   p.moons.forEach(m=>{if(!m._p)return;const ms=toS(m._p.x,m._p.y);
+    ctx.fillText(m.n,ms.x,ms.y-m.r*cam.scale-4);});
+  }
+  if(cam.scale>.9)p.moons.forEach(m=>{if(m._p)consider(m.n,m._p.x,m._p.y,'luna de '+p.n);});
+ });
+ consider('Sol',0,0,'estrella central · 1361 W/m² en la Tierra');
+ if(state.ly.asteroids&&cam.scale>.12){ctx.font='9px Segoe UI';ctx.fillStyle='#c99a80';
+  NEO.forEach(o=>{const s=toS(o._p.x,o._p.y);ctx.fillText(o.n,s.x,s.y-8);
+   consider(o.n,o._p.x,o._p.y,`NEO · ${o._au.toFixed(3)} UA del Sol`);});}
+ if(state.ly.comets){ctx.font='9px Segoe UI';ctx.fillStyle='#8fd4e8';
+  comets.forEach(c=>{const s=toS(c._p.x,c._p.y);ctx.fillText('☄ '+c.n,s.x,s.y-9);
+   consider(c.n,c._p.x,c._p.y,`cometa · ${c._au.toFixed(2)} UA del Sol`);});}
+ if(hov){
+  ctx.font='11px Segoe UI';
+  const w1=ctx.measureText(hov.name).width,w2=ctx.measureText(hov.info).width;
+  const bw=Math.max(w1,w2)+16,bx=Math.min(W-bw-6,hov.x+14),by=Math.max(6,hov.y-40);
+  ctx.fillStyle='rgba(12,17,32,.92)';ctx.strokeStyle='#2c4370';
+  ctx.beginPath();ctx.roundRect?ctx.roundRect(bx,by,bw,32,6):ctx.rect(bx,by,bw,32);ctx.fill();ctx.stroke();
+  ctx.textAlign='left';ctx.fillStyle='#fff';ctx.fillText(hov.name,bx+8,by+13);
+  ctx.fillStyle='#9fb4d8';ctx.font='10px Segoe UI';ctx.fillText(hov.info,bx+8,by+26);
+  ctx.textAlign='center';
+ }
+ ctx.textAlign='left';ctx.fillStyle='#e8f1ff';ctx.font='12px Segoe UI';
+ const fecha=dateOf(state.day).toLocaleDateString('es-ES',{day:'numeric',month:'short',year:'numeric'});
+ ctx.fillText(`📅 ${fecha} · Luna: ${ph.name}`,12,20);
+ ctx.fillStyle='#7d93b8';ctx.font='10px Segoe UI';
+ ctx.fillText('Órbitas keplerianas J2000 · escala radial ∝ UA^0.55 · Rueda: zoom · Arrastrar: mover · Doble clic: seguir',12,36);
+ return {ph,se,le,mf};
+}
+function drawTrail(t,col){if(t.length<2)return;
+ ctx.strokeStyle=col;
+ for(let i=1;i<t.length;i++){ctx.globalAlpha=i/t.length*.4;
+  ctx.lineWidth=1/cam.scale;
+  ctx.beginPath();ctx.moveTo(t[i-1].x,t[i-1].y);ctx.lineTo(t[i].x,t[i].y);ctx.stroke();}
+ ctx.globalAlpha=1;}
+
+/* ============ gráficos / telemetría ============ */
+const hist={rad:[],tide:[],solid:[]};
+function pushHist(r){
+ const tf=Math.pow(1/r.mf,3);                     // marea ∝ 1/d³ (perigeo/apogeo)
+ const rad=1361/(E._au*E._au)*(1-.92*r.se.cov);   // radiación ∝ 1/d² Tierra-Sol
+ const tide=(0.9+1.1*r.ph.syz)*tf,solid=30+22*r.ph.syz*tf;
+ hist.rad.push(rad);hist.tide.push(tide);hist.solid.push(solid);
+ for(const k in hist)if(hist[k].length>240)hist[k].shift();
+ return {rad,tide,solid};
+}
+function drawGraph(id,data,col,min,max){
+ const c=document.getElementById(id),g=c.getContext('2d');
+ c.width=c.clientWidth;c.height=58;g.clearRect(0,0,c.width,58);
+ g.strokeStyle='#1e2a4a';g.strokeRect(0,0,c.width,58);
+ if(data.length<2)return;
+ g.strokeStyle=col;g.lineWidth=1.6;g.beginPath();
+ data.forEach((v,i)=>{const x=i/239*c.width,y=52-((v-min)/(max-min))*48;
+  i?g.lineTo(x,y):g.moveTo(x,y);});
+ g.stroke();g.fillStyle='#9fb4d8';g.font='9px Segoe UI';
+ g.fillText(data[data.length-1].toFixed(1),4,11);
+}
+
+/* ============ bucle ============ */
+const dateIn=document.getElementById('dateIn');
+let last=performance.now(),tick=0;
+function loop(now){
+ const dt=Math.min(.05,(now-last)/1000);last=now;
+ state.day+=state.speed*dt;
+ planets.forEach(p=>p.moons.forEach(m=>m.a+=dt*state.speed*TAU/Math.abs(m.T)*Math.sign(m.T)));
+ belt.forEach(b=>b.a+=b.w*dt*state.speed);
+ updatePositions(++frameCt%4===0);
+
+ if(follow){const t=follow._p||{x:0,y:0},k=1-Math.exp(-dt*6);
+  cam.x+=(t.x-cam.x)*k;cam.y+=(t.y-cam.y)*k;}
+ if(targetScale){cam.scale+=(targetScale-cam.scale)*(1-Math.exp(-dt*4));
+  if(Math.abs(targetScale-cam.scale)<targetScale*.005){cam.scale=targetScale;targetScale=null;}}
+
+ const r=draw(dt,now),m=pushHist(r);
+ if(++tick%8===0){
+  document.getElementById('t-rad').textContent=m.rad.toFixed(0)+' W/m²';
+  document.getElementById('t-temp').textContent=(-r.se.cov*5.2).toFixed(1)+' °C';
+  document.getElementById('t-dsun').textContent=E._au.toFixed(3)+' UA';
+  document.getElementById('t-dmoon').textContent=Math.round(384400*r.mf).toLocaleString('es')+' km';
+  const pct=Math.round(50+50*r.ph.syz);
+  document.getElementById('t-tide').textContent=pct+'% '+(pct>80?'(Alta)':pct>60?'(Media)':'(Baja)');
+  document.getElementById('t-stress').textContent=r.ph.syz>.8?'Máximo':r.ph.syz>.4?'Moderado':'Mínimo';
+  document.getElementById('t-def').textContent=m.solid.toFixed(0)+' cm';
+  document.getElementById('t-planet').textContent=best.n?`${best.n} ${(best.rel*100).toFixed(2)}% (de la Luna)`:'—';
+  document.getElementById('t-phase').textContent=`Edad ${(r.ph.f/TAU*SYN).toFixed(1)} d (${r.ph.name})`;
+  const off=Math.abs(Math.sin(moonAnom()-nodeAngle()));
+  document.getElementById('t-node').textContent=off<.18?'Alineado':'Desalineado';
+  document.getElementById('t-zoom').textContent='×'+(cam.scale/fitScale()).toFixed(1);
+  const fd=document.getElementById('fs-d');
+  if(fd&&follow&&follow.el){fd.textContent=follow._au.toFixed(3)+' UA';
+   document.getElementById('fs-v').textContent=
+    (29.784*Math.sqrt(Math.abs(2/follow._au-1/follow.el.a))).toFixed(1)+' km/s';}
+  if(document.activeElement!==dateIn){
+   try{dateIn.value=dateOf(state.day).toISOString().slice(0,10);}catch(e){}}
+  drawGraph('g1',hist.rad,'#ffcc44',0,1500);
+  drawGraph('g2',hist.tide,'#4da3ff',0,2.6);
+  drawGraph('g3',hist.solid,'#ff8f6b',25,60);
+ }
+ requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+
+/* ============ UI ============ */
+document.querySelectorAll('.modes button').forEach(b=>b.onclick=()=>{
+ document.querySelectorAll('.modes button').forEach(x=>x.classList.remove('active'));
+ b.classList.add('active');scenario(b.dataset.mode);});
+['shadow','bulge','plates','incl','gravity','moons','sats','asteroids','comets','orbits'].forEach(k=>{
+ document.getElementById('ly-'+k).onchange=e=>state.ly[k]=e.target.checked?1:0;});
+const sp=document.getElementById('speed');
+sp.oninput=()=>{state.speed=+sp.value;document.getElementById('speedVal').textContent=sp.value+' d/s';};
+function jumpTo(d){state.day=d;[...NEO,...comets].forEach(o=>o.trail=[]);syncMoonToDate();}
+dateIn.onchange=()=>{const t=Date.parse(dateIn.value+'T12:00:00Z');
+ if(!isNaN(t))jumpTo((t-J2000_MS)/86400000);};
+document.getElementById('todayBtn').onclick=()=>jumpTo(daysNow());
+function toggleUI(){document.body.classList.toggle('hideui');}
+document.getElementById('hideBtn').onclick=toggleUI;
+addEventListener('keydown',e=>{if(e.key.toLowerCase()==='h')toggleUI();});
+</script>
+</body>
+</html>

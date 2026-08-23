@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Cosmos Lab v2 · Atlas Exoplanetario, N-cuerpos y Kerr</title>
+  <link rel="stylesheet" href="/src/ui/styles/main.css" />
+</head>
+<body>
+  <!-- Header Superior -->
+<header>
+    <nav class='workspace-tabs' aria-label='Espacios científicos'>
+      <button class='workspace-tab active' data-workspace='solar'>Sistema Solar</button>
+      <button class='workspace-tab' data-workspace='atlas'>Atlas</button>
+      <button class='workspace-tab' data-workspace='lab'>Laboratorio N-cuerpos</button>
+      <button class='workspace-tab' data-workspace='kerr'>Relatividad Kerr</button>
+    </nav>
+    <div class="brand">
+      <span class="brand-icon">🪐</span>
+      <h1>Sistema Solar 3D · Astrofísica & Geología</h1>
+      <span>v2.0 · Atlas, N-cuerpos & Relatividad Kerr</span>
+    </div>
+    <div class="header-actions">
+      <button id="toggle-left-panel-btn" class="hud-btn active">📊 Panel Lateral</button>
+      <button id="toggle-charts-btn" class="hud-btn active">📈 Telemetría & Gráficos</button>
+    </div>
+</header>
+
+  <div id='science-workspace' aria-live='polite'>
+    <div id='science-workspace-content'></div>
+  </div>
+
+  <!-- Contenedor Principal de la Aplicación -->
+  <div id="app-container">
+    <!-- Panel Lateral Izquierdo -->
+    <aside id="left-panel">
+      <!-- Navegación Planetaria -->
+      <div class="panel-section">
+        <div class="section-title">
+          <span>Navegación del Sistema</span>
+        </div>
+        <div style="font-size: 10px; color: var(--txt-muted); text-transform: uppercase; margin-bottom: 6px;">8 Planetas Principales</div>
+        <div class="planet-nav-grid" id="planet-nav-grid">
+          <!-- Botones inyectados por UIController -->
+        </div>
+
+        <div style="font-size: 10px; color: var(--txt-muted); text-transform: uppercase; margin: 12px 0 6px;">Planetas Enanos & Cuerpos Menores</div>
+        <div class="planet-nav-grid" id="dwarf-nav-grid">
+          <!-- Botones Ceres, Plutón, Haumea, Makemake, Eris, Sedna -->
+        </div>
+
+        <p style="font-size: 11px; color: var(--txt-muted); margin-top: 8px; line-height: 1.4;">
+          🖱️ <b>Arrastrar:</b> Rotar cámara · <b>Rueda:</b> Zoom · <b>Clic:</b> Seleccionar astro / Accidente geográfico.
+        </p>
+      </div>
+
+      <!-- Termostato Estelar & Efectos Planetarios -->
+      <div class="panel-section">
+        <div class="section-title">Termostato Solar & Zona Habitable</div>
+        <div class="star-temp-gauge">
+          <span style="font-size: 10px; color: var(--txt-muted); text-transform: uppercase;">Temperatura Superficial del Sol</span>
+          <div class="temp-number" id="star-temp-val">5,778 K</div>
+          <div style="display: flex; justify-content: space-between; font-size: 11px; color: var(--txt-secondary); margin-top: 4px;">
+            <span>Luminosidad: <b id="star-lum-val" style="color:#fff">1.00 L☉</b></span>
+            <span>Zona Habitable: <b id="star-hz-val" style="color:var(--accent-green)">0.95 – 1.68 UA</b></span>
+          </div>
+        </div>
+
+        <div style="margin-top: 10px;">
+          <input type="range" id="star-temp-slider" min="2500" max="10000" step="50" value="5778" style="width: 100%;" />
+        </div>
+
+        <div style="margin-top: 8px;">
+          <span style="font-size: 10px; color: var(--txt-muted); text-transform: uppercase;">Clases Espectrales Estelares</span>
+          <div class="spectral-buttons" id="spectral-class-buttons">
+            <!-- Botones M, K, G, F, A inyectados -->
+          </div>
+        </div>
+      </div>
+
+      <!-- Control de Tiempo & Efemérides -->
+      <div class="panel-section">
+        <div class="section-title">Tiempo & Efemérides (J2000)</div>
+        <div class="time-controls">
+          <div class="time-row">
+            <span>📅</span>
+            <input type="date" id="sim-date-picker" />
+            <button id="today-btn" class="hud-btn" style="padding: 5px 8px;">Hoy</button>
+          </div>
+          <div class="time-row">
+            <span>⏱️</span>
+            <input type="range" id="time-speed-slider" min="0" max="60" step="0.5" value="3" />
+            <span id="time-speed-val" style="font-family: var(--font-mono); width: 45px; text-align: right;">3 d/s</span>
+          </div>
+          <div style="display: flex; gap: 8px; margin-top: 4px;">
+            <button id="play-pause-btn" class="hud-btn" style="flex: 1; justify-content: center;">⏸ Pausa</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Capas de Visualización 3D -->
+      <div class="panel-section">
+        <div class="section-title">Capas y Regiones del Sistema</div>
+        <div style="display: flex; flex-direction: column; gap: 8px; font-size: 12px;">
+          <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+            <input type="checkbox" id="chk-habitable-zone" checked style="accent-color: var(--accent-green);" />
+            <span>Zona de Habitabilidad 3D (Goldilocks)</span>
+          </label>
+          <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+            <input type="checkbox" id="chk-orbits" checked style="accent-color: var(--accent-cyan);" />
+            <span>Órbitas Keplerianas 3D (con Inclinación)</span>
+          </label>
+          <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+            <input type="checkbox" id="chk-kuiper" checked style="accent-color: #38bdf8;" />
+            <span>Cinturón de Kuiper (30 – 55 UA)</span>
+          </label>
+          <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+            <input type="checkbox" id="chk-oort" checked style="accent-color: #a78bfa;" />
+            <span>Nube de Oort (Esfera Helada Exterior)</span>
+          </label>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Viewport 3D Three.js -->
+    <div id="viewport-3d"></div>
+
+    <!-- Panel Lateral Derecho: Ficha Técnica & Geología -->
+    <aside id="right-panel">
+      <!-- Inyectado dinámicamente por PlanetDossier -->
+    </aside>
+
+    <!-- Barra Inferior de Gráficos Comparativos -->
+    <div id="bottom-graphs">
+      <div class="chart-box">
+        <h3>Comparativa de Temperaturas Planetarias (°C)</h3>
+        <div class="chart-container">
+          <canvas id="temp-chart"></canvas>
+        </div>
+      </div>
+      <div class="chart-box">
+        <h3>Irradiancia Solar Incidente (W/m² - Escala Log)</h3>
+        <div class="chart-container">
+          <canvas id="irradiance-chart"></canvas>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal de Información Geográfica Detallada -->
+  <div id="landmark-modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3 id="modal-landmark-title" style="color: #fff; font-size: 16px;">Accidente Geográfico</h3>
+        <button id="close-modal-btn" class="modal-close">✕</button>
+      </div>
+      <div style="font-size: 11px; color: var(--accent-cyan); font-family: var(--font-mono); margin-bottom: 8px;" id="modal-landmark-category"></div>
+      <div style="font-size: 11px; color: var(--txt-muted); font-family: var(--font-mono); margin-bottom: 12px;" id="modal-landmark-coords"></div>
+      <p id="modal-landmark-desc" style="font-size: 12px; line-height: 1.5; color: var(--txt-primary); margin-bottom: 12px;"></p>
+      <div style="background: rgba(16, 26, 51, 0.8); border-left: 3px solid var(--accent-gold); padding: 10px; border-radius: 0 6px 6px 0;">
+        <span style="font-size: 10px; color: var(--accent-gold); text-transform: uppercase; font-weight: bold; display: block; margin-bottom: 4px;">Significado Geológico & Formación</span>
+        <p id="modal-landmark-geo" style="font-size: 11px; color: var(--txt-secondary); line-height: 1.4;"></p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Script Principal TypeScript -->
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
