@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { SkyEngine, type SkyObject, type SkyObservation, type TwilightState } from "../core/physics/SkyEngine";
 
-const RADIUS = 120;
+const RADIUS = 28;
 
 export class SkyRenderer {
   private readonly renderer: THREE.WebGLRenderer;
@@ -9,7 +9,7 @@ export class SkyRenderer {
   private readonly camera: THREE.PerspectiveCamera;
   private readonly root = new THREE.Group();
   private readonly pickables: THREE.Object3D[] = [];
-  private readonly objectMeshes = new Map<string, THREE.Mesh>();
+  private readonly objectMeshes = new Map<string, THREE.Sprite>();
   private readonly labels = new Map<string, THREE.Sprite>();
   private readonly faintStars: THREE.Points;
   private readonly ground: THREE.Mesh;
@@ -39,7 +39,7 @@ export class SkyRenderer {
     });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
-    this.camera = new THREE.PerspectiveCamera(this.fov, 1, 0.1, 400);
+    this.camera = new THREE.PerspectiveCamera(this.fov, 1, 0.05, 200);
     this.camera.position.set(0, 0.08, 0);
     this.scene.add(this.root);
 
@@ -115,12 +115,7 @@ export class SkyRenderer {
   private upsertObject(obj: SkyObject, selectedId: string | null, twilight: TwilightState): void {
     let mesh = this.objectMeshes.get(obj.id);
     if (!mesh) {
-      const geom =
-        obj.kind === "star"
-          ? new THREE.SphereGeometry(0.35, 8, 8)
-          : new THREE.SphereGeometry(1, 24, 16);
-      const mat = new THREE.MeshBasicMaterial({ color: obj.colorHex });
-      mesh = new THREE.Mesh(geom, mat);
+      mesh = makeDisc(obj.colorHex, obj.kind);
       mesh.userData.id = obj.id;
       this.objectMeshes.set(obj.id, mesh);
       this.root.add(mesh);
@@ -133,21 +128,15 @@ export class SkyRenderer {
     const p = altAzToVector(obj.altitudeDeg, obj.azimuthDeg, RADIUS);
     mesh.position.copy(p);
     const size = objectScale(obj, twilight);
-    mesh.scale.setScalar(size);
-    (mesh.material as THREE.MeshBasicMaterial).color.set(obj.colorHex);
-    (mesh.material as THREE.MeshBasicMaterial).opacity = obj.aboveHorizon ? 1 : 0.18;
-    (mesh.material as THREE.MeshBasicMaterial).transparent = !obj.aboveHorizon;
-    mesh.visible = obj.kind !== "star" || obj.magnitude < 2.2 || obj.aboveHorizon;
+    mesh.scale.set(size, size, 1);
+    mesh.visible = obj.kind !== "star" || obj.aboveHorizon;
 
     const label = this.labels.get(obj.id);
     if (label) {
-      label.position.copy(p).multiplyScalar(1.04);
-      label.visible =
-        obj.kind !== "star" &&
-        (obj.aboveHorizon || selectedId === obj.id) &&
-        (obj.kind !== "sun" || twilight.condition === "day" || obj.aboveHorizon);
+      label.position.copy(p).multiplyScalar(1.06);
+      label.visible = obj.kind !== "star" && obj.aboveHorizon;
       const selected = selectedId === obj.id;
-      label.scale.set(selected ? 14 : 10, selected ? 4.2 : 3, 1);
+      label.scale.set(selected ? 8 : 6, selected ? 2.4 : 1.8, 1);
     }
   }
 
@@ -225,7 +214,14 @@ export class SkyRenderer {
     geom.setAttribute("position", new THREE.BufferAttribute(positions, 3));
     return new THREE.Points(
       geom,
-      new THREE.PointsMaterial({ color: 0xc9d4dc, size: 0.45, sizeAttenuation: true, opacity: 0.55, transparent: true }),
+      new THREE.PointsMaterial({
+        color: 0xe8eef2,
+        size: 2.4,
+        sizeAttenuation: false,
+        opacity: 0.85,
+        transparent: true,
+        depthWrite: false,
+      }),
     );
   }
 
@@ -285,10 +281,11 @@ export class SkyRenderer {
   }
 
   private applyCamera(): void {
-    const target = altAzToVector(this.viewAlt, this.viewAz, 40);
+    const target = altAzToVector(this.viewAlt, this.viewAz, 8);
     this.camera.fov = this.fov;
     this.camera.lookAt(target);
     this.camera.updateProjectionMatrix();
+    this.renderer.render(this.scene, this.camera);
   }
 
   private resize(): void {
@@ -311,11 +308,31 @@ function altAzToVector(altDeg: number, azDeg: number, radius: number): THREE.Vec
 }
 
 function objectScale(obj: SkyObject, twilight: TwilightState): number {
-  if (obj.kind === "sun") return twilight.condition === "day" ? 6.4 : 4.6;
-  if (obj.kind === "moon") return 4.2;
-  if (obj.kind === "star") return Math.max(0.28, 1.35 - obj.magnitude * 0.28);
-  const magScale = Math.max(0.7, 2.8 - obj.magnitude * 0.22);
-  return magScale + Math.min(2.2, Math.log10(obj.angularSizeArcsec + 1));
+  if (obj.kind === "sun") return twilight.condition === "day" ? 3.8 : 2.6;
+  if (obj.kind === "moon") return 2.4;
+  if (obj.kind === "star") return Math.max(0.35, 1.15 - obj.magnitude * 0.18);
+  return Math.max(0.7, 1.6 - Math.max(-2, obj.magnitude) * 0.12);
+}
+
+function makeDisc(color: string, kind: SkyObject["kind"]): THREE.Sprite {
+  const canvas = document.createElement("canvas");
+  canvas.width = 128;
+  canvas.height = 128;
+  const ctx = canvas.getContext("2d")!;
+  const g = ctx.createRadialGradient(64, 64, kind === "star" ? 6 : 10, 64, 64, 60);
+  g.addColorStop(0, "#ffffff");
+  g.addColorStop(0.22, color);
+  g.addColorStop(0.55, color);
+  g.addColorStop(1, "rgba(0,0,0,0)");
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.arc(64, 64, 60, 0, Math.PI * 2);
+  ctx.fill();
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return new THREE.Sprite(
+    new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false, sizeAttenuation: true }),
+  );
 }
 
 function makeLabel(text: string, scale = 1): THREE.Sprite {
