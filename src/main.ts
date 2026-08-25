@@ -18,7 +18,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // 3. Instanciar controlador de interfaz de usuario
   const uiController = new UIController(sceneManager, timeEngine);
-  new WorkspaceController();
+  new WorkspaceController({
+    onSelectBody: (id) => {
+      if (id && id !== 'moon' && id !== 'sun') uiController.selectPlanet(id);
+    }
+  });
 
   // 4. Render & Simulation Loop
   let lastDays = timeEngine.getDaysSinceJ2000();

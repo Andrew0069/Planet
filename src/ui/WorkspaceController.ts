@@ -10,8 +10,19 @@ import { KerrEngine, KerrGeometry, KerrTrajectory } from '../core/relativity/Ker
 import { cloneSystemForLab, CURATED_SYSTEMS } from '../data/exoplanets.data';
 import { NasaExoplanetClient } from '../services/NasaExoplanetClient';
 import { NBodyWorkerClient } from '../services/NBodyWorkerClient';
+import {
+  cardinalFromAzimuth,
+  formatAzimuth,
+  formatHours,
+  SANTA_TECLA,
+  SkyEngine,
+  type ObserverSite,
+  type SkyObject,
+  type SkyObservation
+} from '../core/physics/SkyEngine';
+import { SkyRenderer } from '../render/SkyRenderer';
 
-type Workspace = 'solar' | 'atlas' | 'lab' | 'kerr';
+type Workspace = 'solar' | 'sky' | 'atlas' | 'lab' | 'kerr';
 
 interface KerrResponse {
   id: number;
@@ -40,8 +51,19 @@ export class WorkspaceController {
   private kerrRenderer: { render: (spin: number, inclination: number, geometry: KerrGeometry) => void; dispose: () => void } | null = null;
   private kerrRequestId = 0;
   private currentWorkspace: Workspace = 'solar';
+  private skyRenderer: SkyRenderer | null = null;
+  private skySite: ObserverSite = SkyEngine.loadSite();
+  private skyDate = new Date();
+  private skyLive = true;
+  private skySelectedId: string | null = null;
+  private skyRaf = 0;
+  private skyDidFrame = false;
+  private lastSkyListMs = 0;
+  private skyEventsKey = '';
+  private skyEventsHtml = '';
+  private lastObservation: SkyObservation | null = null;
 
-  constructor() {
+  constructor(private readonly hooks: { onSelectBody?: (id: string | null) => void } = {}) {
     this.shell = requiredElement('science-workspace');
     this.content = requiredElement('science-workspace-content');
     this.viewport = requiredElement('viewport-3d');
@@ -57,6 +79,12 @@ export class WorkspaceController {
       this.kerrRenderer?.dispose();
       this.kerrRenderer = null;
     }
+    if (workspace !== 'sky') {
+      this.stopSkyLoop();
+      this.skyRenderer?.dispose();
+      this.skyRenderer = null;
+      this.skyDidFrame = false;
+    }
     this.currentWorkspace = workspace;
     document.querySelectorAll('[data-workspace]').forEach((button) => button.classList.toggle('active', (button as HTMLElement).dataset.workspace === workspace));
     const showLegacy = workspace === 'solar';
@@ -67,9 +95,168 @@ export class WorkspaceController {
       this.stopLabLoop();
       return;
     }
+    if (workspace === 'sky') this.renderSky(true);
     if (workspace === 'atlas') this.renderAtlas();
     if (workspace === 'lab') void this.renderLab(true);
     if (workspace === 'kerr') this.renderKerr();
+  }
+
+  private renderSky(rebuild: boolean): void {
+    this.stopLabLoop();
+    if (this.skyLive) this.skyDate = new Date();
+    const observation = SkyEngine.observe(this.skySite, this.skyDate);
+    this.lastObservation = observation;
+    if (rebuild) {
+      this.content.innerHTML = skyShellHtml(this.skySite, this.skyDate, this.skyLive);
+      const canvas = requiredCanvas('sky-canvas');
+      this.skyRenderer?.dispose();
+      this.skyRenderer = new SkyRenderer(canvas);
+      this.skyRenderer.onSelect = (id) => this.selectSkyObject(id);
+      this.bindSkyControls();
+      this.skyDidFrame = false;
+    }
+    this.paintSkyHud(observation);
+    this.skyRenderer?.update(observation, this.skySelectedId);
+    if (!this.skyDidFrame) {
+      const target =
+        observation.objects.find((item) => item.id === this.skySelectedId) ??
+        brightestAbove(observation.objects);
+      if (target) this.skyRenderer?.lookAt(target.azimuthDeg, target.altitudeDeg);
+      this.skyDidFrame = true;
+    }
+    this.startSkyLoop();
+  }
+
+  private startSkyLoop(): void {
+    if (this.skyRaf) return;
+    const tick = (now: number) => {
+      if (this.currentWorkspace !== 'sky') {
+        this.skyRaf = 0;
+        return;
+      }
+      this.skyRaf = requestAnimationFrame(tick);
+      const hudInterval = this.skyLive ? 1000 : 400;
+      const refresh = !this.lastObservation || now - this.lastSkyListMs >= hudInterval;
+      if (this.skyLive && refresh) this.skyDate = new Date();
+      if (refresh) {
+        this.lastObservation = SkyEngine.observe(this.skySite, this.skyDate);
+        this.lastSkyListMs = now;
+        this.paintSkyHud(this.lastObservation);
+      }
+      this.skyRenderer?.update(this.lastObservation!, this.skySelectedId);
+    };
+    this.skyRaf = requestAnimationFrame(tick);
+  }
+
+  private stopSkyLoop(): void {
+    if (this.skyRaf) cancelAnimationFrame(this.skyRaf);
+    this.skyRaf = 0;
+  }
+
+  private bindSkyControls(): void {
+    requiredElement('sky-now-btn').addEventListener('click', () => {
+      this.skyLive = true;
+      this.skyDate = new Date();
+      this.renderSky(false);
+      this.syncSkyInputs();
+    });
+    requiredInput('sky-live').addEventListener('change', (event) => {
+      this.skyLive = (event.target as HTMLInputElement).checked;
+      if (this.skyLive) this.skyDate = new Date();
+      this.renderSky(false);
+    });
+    requiredInput('sky-datetime').addEventListener('change', (event) => {
+      this.skyLive = false;
+      this.skyDate = SkyEngine.fromLocalInputValue(
+        (event.target as HTMLInputElement).value,
+        this.skySite.utcOffsetHours,
+      );
+      requiredInput('sky-live').checked = false;
+      this.skyDidFrame = false;
+      this.renderSky(false);
+    });
+    requiredInput('sky-lat').addEventListener('change', () => this.commitSkySite());
+    requiredInput('sky-lon').addEventListener('change', () => this.commitSkySite());
+    requiredElement('sky-reset-site').addEventListener('click', () => {
+      this.skySite = { ...SANTA_TECLA };
+      SkyEngine.saveSite(this.skySite);
+      this.skyDidFrame = false;
+      this.renderSky(true);
+    });
+  }
+
+  private commitSkySite(): void {
+    this.skySite = {
+      ...this.skySite,
+      latitudeDeg: Number(requiredInput('sky-lat').value),
+      longitudeDeg: Number(requiredInput('sky-lon').value),
+    };
+    SkyEngine.saveSite(this.skySite);
+    this.skyDidFrame = false;
+    this.renderSky(false);
+    this.syncSkyInputs();
+  }
+
+  private syncSkyInputs(): void {
+    const dateInput = document.getElementById('sky-datetime') as HTMLInputElement | null;
+    const liveInput = document.getElementById('sky-live') as HTMLInputElement | null;
+    if (dateInput) dateInput.value = SkyEngine.toLocalInputValue(this.skyDate, this.skySite.utcOffsetHours);
+    if (liveInput) liveInput.checked = this.skyLive;
+  }
+
+  private selectSkyObject(id: string | null): void {
+    this.skySelectedId = id;
+    const observation = SkyEngine.observe(this.skySite, this.skyDate);
+    this.lastObservation = observation;
+    const obj = observation.objects.find((item) => item.id === id);
+    if (obj && obj.kind !== 'star') this.hooks.onSelectBody?.(obj.kind === 'sun' ? null : obj.id);
+    if (obj) this.skyRenderer?.lookAt(obj.azimuthDeg, obj.altitudeDeg);
+    this.paintSkyHud(observation);
+    this.skyRenderer?.update(observation, this.skySelectedId);
+  }
+
+  private paintSkyHud(observation: SkyObservation): void {
+    const twilight = document.getElementById('sky-twilight');
+    const lst = document.getElementById('sky-lst');
+    const stamp = document.getElementById('sky-stamp');
+    const list = document.getElementById('sky-object-list');
+    const card = document.getElementById('sky-selected');
+    const hint = document.getElementById('sky-hint');
+    if (twilight) twilight.textContent = observation.twilight.label;
+    if (lst) lst.textContent = formatHours(observation.lstHours);
+    if (stamp) {
+      stamp.textContent = `${observation.site.name} · ${SkyEngine.toLocalInputValue(observation.date, observation.site.utcOffsetHours).replace('T', ' ')} UTC${observation.site.utcOffsetHours >= 0 ? '+' : ''}${observation.site.utcOffsetHours}`;
+    }
+    const bodies = observation.objects.filter((item) => item.kind !== 'star');
+    const visibleStars = observation.objects.filter((item) => item.kind === 'star' && item.aboveHorizon).length;
+    if (hint) {
+      hint.textContent = `${bodies.filter((item) => item.aboveHorizon).length} astros del sistema sobre el horizonte · ${visibleStars} estrellas brillantes · arrastra para mirar`;
+    }
+    if (list) {
+      list.innerHTML = bodies
+        .slice()
+        .sort((a, b) => Number(b.aboveHorizon) - Number(a.aboveHorizon) || a.magnitude - b.magnitude)
+        .map((item) => skyListRow(item, this.skySelectedId === item.id))
+        .join('');
+      list.querySelectorAll<HTMLButtonElement>('[data-sky-id]').forEach((button) => {
+        button.addEventListener('click', () => this.selectSkyObject(button.dataset.skyId ?? null));
+      });
+    }
+    if (card) {
+      const selected =
+        observation.objects.find((item) => item.id === this.skySelectedId) ??
+        brightestAbove(observation.objects);
+      if (selected) {
+        const key = `${selected.id}|${SkyEngine.toLocalInputValue(observation.date, observation.site.utcOffsetHours).slice(0, 10)}|${observation.site.latitudeDeg}|${observation.site.longitudeDeg}`;
+        if (key !== this.skyEventsKey) {
+          this.skyEventsKey = key;
+          this.skyEventsHtml = skyEventsHtml(SkyEngine.events(observation.site, observation.date, selected.id), observation.site);
+        }
+        card.innerHTML = skyCardHtml(selected, this.skyEventsHtml);
+      } else {
+        card.innerHTML = '<p class="hint-copy">Elige un astro.</p>';
+      }
+    }
   }
 
   private renderAtlas(): void {
@@ -514,6 +701,9 @@ export class WorkspaceController {
 
   public dispose(): void {
     this.stopLabLoop();
+    this.stopSkyLoop();
+    this.skyRenderer?.dispose();
+    this.skyRenderer = null;
     this.kerrRenderer?.dispose();
     this.kerrRenderer = null;
     this.kerrWorker?.terminate();
@@ -521,6 +711,104 @@ export class WorkspaceController {
     this.nasaAbort?.abort();
     this.nbody?.dispose();
   }
+}
+
+function skyShellHtml(site: ObserverSite, date: Date, live: boolean): string {
+  return `
+    <section class="sky-layout">
+      <div class="sky-stage">
+        <canvas id="sky-canvas" aria-label="Cielo local"></canvas>
+        <p class="sky-hint" id="sky-hint">Arrastra para mirar · rueda para el campo</p>
+      </div>
+      <aside class="sky-panel" id="sky-panel">
+        <div class="workspace-heading">
+          <div>
+            <span class="eyebrow">CIELO LOCAL</span>
+            <h2>Horizonte</h2>
+          </div>
+          <button class="science-btn" id="sky-now-btn" type="button">Ahora</button>
+        </div>
+        <p class="workspace-intro" id="sky-stamp">${escapeHtml(site.name)}</p>
+        <label class="science-field">
+          <span>Fecha y hora local (UTC${site.utcOffsetHours})</span>
+          <input id="sky-datetime" type="datetime-local" value="${SkyEngine.toLocalInputValue(date, site.utcOffsetHours)}" />
+        </label>
+        <label class="sky-live">
+          <input id="sky-live" type="checkbox" ${live ? 'checked' : ''} />
+          <span>Seguir el reloj</span>
+        </label>
+        <div class="science-grid two">
+          <label class="science-field"><span>Latitud</span><input id="sky-lat" type="number" step="0.0001" min="-90" max="90" value="${site.latitudeDeg}"></label>
+          <label class="science-field"><span>Longitud</span><input id="sky-lon" type="number" step="0.0001" min="-180" max="180" value="${site.longitudeDeg}"></label>
+        </div>
+        <button class="science-btn" id="sky-reset-site" type="button">Santa Tecla</button>
+        <div class="sky-meta">
+          <div><span class="kicker">Condición</span><strong id="sky-twilight">—</strong></div>
+          <div><span class="kicker">TSL</span><strong id="sky-lst">—</strong></div>
+        </div>
+        <div class="section-title">Sistema solar esta noche</div>
+        <div class="sky-object-list" id="sky-object-list"></div>
+        <div class="sky-selected" id="sky-selected"></div>
+      </aside>
+    </section>`;
+}
+
+function skyListRow(item: SkyObject, active: boolean): string {
+  const alt = `${item.altitudeDeg >= 0 ? '+' : ''}${item.altitudeDeg.toFixed(0)}°`;
+  return `<button class="sky-row ${active ? 'active' : ''} ${item.aboveHorizon ? 'up' : 'down'}" data-sky-id="${escapeHtml(item.id)}" type="button">
+    <span class="body-dot" style="background:${escapeHtml(item.colorHex)}"></span>
+    <span class="sky-row-copy"><strong>${escapeHtml(item.name)}</strong><small>${item.aboveHorizon ? formatAzimuth(item.azimuthDeg) : 'bajo horizonte'} · mag ${item.magnitude.toFixed(1)}</small></span>
+    <span class="sky-alt">${alt}</span>
+  </button>`;
+}
+
+function skyCardHtml(item: SkyObject, eventsHtml: string): string {
+  const kindLabel = item.kind === 'sun' ? 'Sol' : item.kind === 'moon' ? 'Luna' : item.kind === 'planet' ? 'Planeta' : 'Estrella';
+  return `
+    <div class="dossier-head compact">
+      <div>
+        <h2><span class="body-dot" style="background:${escapeHtml(item.colorHex)}"></span> ${escapeHtml(item.name)}</h2>
+        <div class="dossier-type">${kindLabel} · ${item.aboveHorizon ? 'sobre el horizonte' : 'bajo el horizonte'}</div>
+      </div>
+    </div>
+    <div class="telemetry-grid">
+      <span class="tele-k">Altitud</span><span class="tele-v">${item.altitudeDeg.toFixed(1)}°</span>
+      <span class="tele-k">Azimut</span><span class="tele-v">${formatAzimuth(item.azimuthDeg)} · ${cardinalFromAzimuth(item.azimuthDeg)}</span>
+      <span class="tele-k">AR / Dec</span><span class="tele-v">${formatHours(item.raDeg / 15)} / ${item.decDeg.toFixed(1)}°</span>
+      <span class="tele-k">Magnitud vis.</span><span class="tele-v">${item.magnitude.toFixed(2)}</span>
+      <span class="tele-k">Elongación</span><span class="tele-v">${item.kind === 'star' ? '—' : `${item.elongationDeg.toFixed(1)}°`}</span>
+      <span class="tele-k">Fase</span><span class="tele-v">${item.kind === 'star' || item.kind === 'sun' ? '—' : `${Math.round(item.phase * 100)}%`}</span>
+      <span class="tele-k">Tamaño ang.</span><span class="tele-v">${item.angularSizeArcsec > 1 ? `${item.angularSizeArcsec.toFixed(0)}″` : '—'}</span>
+      <span class="tele-k">Distancia</span><span class="tele-v">${item.kind === 'star' ? '—' : `${item.distanceAU < 0.01 ? (item.distanceAU * 149597870.7).toFixed(0) + ' km' : item.distanceAU.toFixed(3) + ' UA'}`}</span>
+    </div>
+    ${eventsHtml}
+    <p class="model-disclaimer">${escapeHtml(item.note ?? '')} Evidencia: ${evidenceLabel(item.evidence)}.</p>
+  `;
+}
+
+function skyEventsHtml(
+  events: ReturnType<typeof SkyEngine.events>,
+  site: ObserverSite,
+): string {
+  const fmt = (value: Date | null) =>
+    value ? SkyEngine.toLocalInputValue(value, site.utcOffsetHours).slice(11) : '—';
+  let status = 'Sale, culmina y se pone en la fecha civil local.';
+  if (events.circumpolar) status = 'Circumpolar: no se pone.';
+  if (events.neverRises) status = 'No sale en esta latitud hoy.';
+  return `<div class="sky-events">
+    <div><span class="kicker">Salida</span><strong>${fmt(events.rise)}</strong></div>
+    <div><span class="kicker">Culminación</span><strong>${fmt(events.transit)}</strong></div>
+    <div><span class="kicker">Ocaso</span><strong>${fmt(events.set)}</strong></div>
+    <p class="hint-copy">${status}</p>
+  </div>`;
+}
+
+function brightestAbove(objects: SkyObject[]): SkyObject | undefined {
+  return objects
+    .filter((item) => item.kind !== 'star' && item.aboveHorizon && item.kind !== 'sun')
+    .sort((a, b) => a.magnitude - b.magnitude)[0]
+    ?? objects.find((item) => item.kind === 'star' && item.aboveHorizon)
+    ?? objects.find((item) => item.kind === 'sun');
 }
 
 function metric(label: string, value: string, evidence: Parameters<typeof evidenceLabel>[0]): string {
