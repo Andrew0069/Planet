@@ -30,16 +30,16 @@ export class ChartsManager {
           {
             label: 'Temp. Superficie Estimada (°C)',
             data: [],
-            backgroundColor: 'rgba(56, 189, 248, 0.7)',
-            borderColor: '#38bdf8',
+            backgroundColor: 'rgba(201, 212, 220, 0.7)',
+            borderColor: '#c9d4dc',
             borderWidth: 1,
             borderRadius: 4
           },
           {
             label: 'Temp. Equilibrio Cuerpo Negro (°C)',
             data: [],
-            backgroundColor: 'rgba(251, 191, 36, 0.4)',
-            borderColor: '#fbbf24',
+            backgroundColor: 'rgba(236, 232, 224, 0.28)',
+            borderColor: '#9a958c',
             borderWidth: 1,
             borderRadius: 4
           }
@@ -52,7 +52,7 @@ export class ChartsManager {
           legend: {
             position: 'top',
             labels: {
-              color: '#8fa3c7',
+              color: '#9a958c',
               font: { size: 9 },
               boxWidth: 10
             }
@@ -66,11 +66,11 @@ export class ChartsManager {
         scales: {
           x: {
             grid: { color: 'rgba(255, 255, 255, 0.05)' },
-            ticks: { color: '#8fa3c7', font: { size: 9 } }
+            ticks: { color: '#9a958c', font: { size: 9 } }
           },
           y: {
             grid: { color: 'rgba(255, 255, 255, 0.05)' },
-            ticks: { color: '#8fa3c7', font: { size: 9 } }
+            ticks: { color: '#9a958c', font: { size: 9 } }
           }
         }
       }
@@ -88,11 +88,11 @@ export class ChartsManager {
           {
             label: 'Irradiancia Solar (W/m²)',
             data: [],
-            borderColor: '#f97316',
-            backgroundColor: 'rgba(249, 115, 22, 0.2)',
+            borderColor: '#c4a574',
+            backgroundColor: 'rgba(196, 165, 116, 0.18)',
             fill: true,
             tension: 0.35,
-            pointBackgroundColor: '#f97316',
+            pointBackgroundColor: '#c4a574',
             pointRadius: 3
           }
         ]
@@ -104,7 +104,7 @@ export class ChartsManager {
           legend: {
             position: 'top',
             labels: {
-              color: '#8fa3c7',
+              color: '#9a958c',
               font: { size: 9 },
               boxWidth: 10
             }
@@ -113,12 +113,12 @@ export class ChartsManager {
         scales: {
           x: {
             grid: { color: 'rgba(255, 255, 255, 0.05)' },
-            ticks: { color: '#8fa3c7', font: { size: 9 } }
+            ticks: { color: '#9a958c', font: { size: 9 } }
           },
           y: {
             type: 'logarithmic',
             grid: { color: 'rgba(255, 255, 255, 0.05)' },
-            ticks: { color: '#8fa3c7', font: { size: 9 } }
+            ticks: { color: '#9a958c', font: { size: 9 } }
           }
         }
       }

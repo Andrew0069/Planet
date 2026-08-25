@@ -71,7 +71,7 @@ export class UIController {
     // Botón para vista general del Sistema
     const sysBtn = document.createElement('button');
     sysBtn.className = 'planet-nav-btn active';
-    sysBtn.textContent = '☀️ Sistema';
+    sysBtn.textContent = 'Sistema';
     sysBtn.addEventListener('click', () => {
       this.selectPlanet(null);
     });
@@ -84,8 +84,11 @@ export class UIController {
     majorPlanets.forEach((planet) => {
       const btn = document.createElement('button');
       btn.className = 'planet-nav-btn';
-      btn.textContent = planet.name;
       btn.setAttribute('data-id', planet.id);
+      const swatch = document.createElement('span');
+      swatch.className = 'planet-swatch';
+      swatch.style.background = planet.colorHex;
+      btn.append(swatch, document.createTextNode(planet.name));
       btn.addEventListener('click', () => {
         this.selectPlanet(planet.id);
       });
@@ -96,8 +99,11 @@ export class UIController {
       dwarfPlanets.forEach((planet) => {
         const btn = document.createElement('button');
         btn.className = 'planet-nav-btn';
-        btn.textContent = planet.name;
         btn.setAttribute('data-id', planet.id);
+        const swatch = document.createElement('span');
+        swatch.className = 'planet-swatch';
+        swatch.style.background = planet.colorHex;
+        btn.append(swatch, document.createTextNode(planet.name));
         btn.addEventListener('click', () => {
           this.selectPlanet(planet.id);
         });
@@ -118,7 +124,7 @@ export class UIController {
     if (this.playPauseBtn) {
       this.playPauseBtn.addEventListener('click', () => {
         const isPaused = this.timeEngine.togglePause();
-        this.playPauseBtn.textContent = isPaused ? '▶ Reanudar' : '⏸ Pausa';
+        this.playPauseBtn.textContent = isPaused ? 'Reanudar' : 'Pausa';
         this.playPauseBtn.classList.toggle('active', isPaused);
       });
     }
@@ -274,7 +280,7 @@ export class UIController {
     const descEl = document.getElementById('modal-landmark-desc');
     const geoEl = document.getElementById('modal-landmark-geo');
 
-    if (titleEl) titleEl.textContent = `${landmark.iconEmoji} ${landmark.name}`;
+    if (titleEl) titleEl.textContent = landmark.name;
     if (catEl) catEl.textContent = `Categoría: ${landmark.category.toUpperCase()} · ${landmark.dimensions}`;
     if (coordsEl) coordsEl.textContent = `Latitud: ${landmark.latDeg}° | Longitud: ${landmark.lonDeg}° | Elevación: ${landmark.elevationKm} km`;
     if (descEl) descEl.textContent = landmark.description;

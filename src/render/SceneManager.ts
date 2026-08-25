@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { applyMilkyWaySky } from './catalogTextures';
 import { PLANETS_DATA, PlanetData } from '../data/planets.data';
 import { GeographicLandmark } from '../data/geography.data';
 import { KeplerianEngine } from '../core/physics/KeplerianEngine';
@@ -39,28 +40,35 @@ export class SceneManager {
   public onPlanetSelected?: (planet: PlanetData | null) => void;
   public onLandmarkSelected?: (landmark: GeographicLandmark) => void;
 
+  private onWindowResize = () => this.handleResize();
+  private onWindowMouseUp = () => {
+    this.isDragging = false;
+  };
+
   constructor(container: HTMLElement) {
     this.container = container;
 
     // 1. Escena
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0x020409);
+    this.scene.background = new THREE.Color(0x07080a);
+    applyMilkyWaySky(this.scene);
 
     // 2. Cámara
-    const aspect = container.clientWidth / container.clientHeight;
+    const aspect = container.clientWidth / container.clientHeight || 16 / 9;
     this.camera = new THREE.PerspectiveCamera(45, aspect, 0.1, 8000);
     this.updateCameraPosition();
 
     // 3. Renderizador WebGL
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
-    this.renderer.setSize(container.clientWidth, container.clientHeight);
+    this.renderer.setSize(container.clientWidth || window.innerWidth, container.clientHeight || window.innerHeight);
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.15;
+    this.renderer.toneMappingExposure = 1.05;
+    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     container.appendChild(this.renderer.domElement);
 
     // 4. Iluminación ambiental
-    const ambientLight = new THREE.AmbientLight(0x283855, 0.45);
+    const ambientLight = new THREE.AmbientLight(0x1c1e24, 0.28);
     this.scene.add(ambientLight);
 
     // 5. Sol
@@ -107,9 +115,9 @@ export class SceneManager {
   private createCelestialGrid(): void {
     const size = 500;
     const divisions = 80;
-    this.celestialGrid = new THREE.GridHelper(size, divisions, 0x1d4ed8, 0x0c214d);
+    this.celestialGrid = new THREE.GridHelper(size, divisions, 0x2a2c32, 0x16181c);
     (this.celestialGrid.material as THREE.Material).transparent = true;
-    (this.celestialGrid.material as THREE.Material).opacity = 0.22;
+    (this.celestialGrid.material as THREE.Material).opacity = 0.1;
     this.celestialGrid.position.y = -0.5;
     this.scene.add(this.celestialGrid);
   }
@@ -160,13 +168,13 @@ export class SceneManager {
     ];
 
     const lineMat = new THREE.LineBasicMaterial({
-      color: 0x38bdf8,
+      color: 0x8a9098,
       transparent: true,
-      opacity: 0.35
+      opacity: 0.18
     });
 
     const starNodeGeo = new THREE.SphereGeometry(2.5, 12, 12);
-    const starNodeMat = new THREE.MeshBasicMaterial({ color: 0x7dd3fc });
+    const starNodeMat = new THREE.MeshBasicMaterial({ color: 0xc9d4dc });
     const starInstanced = new THREE.InstancedMesh(starNodeGeo, starNodeMat, 60);
     let starIdx = 0;
     const dummy = new THREE.Object3D();
@@ -358,9 +366,7 @@ export class SceneManager {
       this.previousMousePosition = { x: e.clientX, y: e.clientY };
     });
 
-    window.addEventListener('mouseup', () => {
-      this.isDragging = false;
-    });
+    window.addEventListener('mouseup', this.onWindowMouseUp);
 
     dom.addEventListener('mousemove', (e) => {
       if (this.isDragging) {
@@ -399,8 +405,31 @@ export class SceneManager {
       this.handleRaycastClick();
     });
 
-    window.addEventListener('resize', () => {
-      this.handleResize();
+    window.addEventListener('resize', this.onWindowResize);
+
+    dom.addEventListener('touchstart', (e) => {
+      if (e.touches.length === 1) {
+        this.isDragging = true;
+        this.previousMousePosition = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+      }
+    }, { passive: true });
+
+    dom.addEventListener('touchmove', (e) => {
+      if (!this.isDragging || e.touches.length !== 1) return;
+      const touch = e.touches[0];
+      const deltaX = touch.clientX - this.previousMousePosition.x;
+      const deltaY = touch.clientY - this.previousMousePosition.y;
+      this.sphericalCoords.theta -= deltaX * 0.005;
+      this.sphericalCoords.phi = Math.max(
+        0.05,
+        Math.min(Math.PI - 0.05, this.sphericalCoords.phi - deltaY * 0.005)
+      );
+      this.previousMousePosition = { x: touch.clientX, y: touch.clientY };
+      this.updateCameraPosition();
+    }, { passive: true });
+
+    dom.addEventListener('touchend', () => {
+      this.isDragging = false;
     });
   }
 
@@ -500,6 +529,7 @@ export class SceneManager {
   public handleResize(): void {
     const width = this.container.clientWidth;
     const height = this.container.clientHeight;
+    if (width < 2 || height < 2) return;
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(width, height);
@@ -520,5 +550,12 @@ export class SceneManager {
 
     this.updateCameraPosition();
     this.renderer.render(this.scene, this.camera);
+  }
+
+  public dispose(): void {
+    window.removeEventListener('resize', this.onWindowResize);
+    window.removeEventListener('mouseup', this.onWindowMouseUp);
+    this.renderer.dispose();
+    this.renderer.domElement.remove();
   }
 }

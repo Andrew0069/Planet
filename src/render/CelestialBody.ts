@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { applyCatalogTexture, applyEarthClouds } from './catalogTextures';
 import { PlanetData, MoonData } from '../data/planets.data';
 import { GEOGRAPHIC_LANDMARKS, GeographicLandmark } from '../data/geography.data';
 import { InternalLayers } from './InternalLayers';
@@ -54,6 +55,7 @@ export class CelestialBody {
 
     this.planetMesh = new THREE.Mesh(geometry, material);
     this.axialTiltGroup.add(this.planetMesh);
+    applyCatalogTexture(data.id, material);
 
     // 5. Capa de Nubes atmosférica independiente (Tierra)
     if (data.id === 'earth') {
@@ -68,6 +70,7 @@ export class CelestialBody {
       });
       this.cloudsMesh = new THREE.Mesh(cloudsGeo, cloudsMat);
       this.axialTiltGroup.add(this.cloudsMesh);
+      applyEarthClouds(cloudsMat);
     }
 
     // 6. Resplandor Atmosférico (Fresnel Glow)
@@ -175,12 +178,12 @@ export class CelestialBody {
     canvas.height = 64;
     const ctx = canvas.getContext('2d')!;
 
-    ctx.font = 'bold 24px "Segoe UI", Arial, sans-serif';
-    ctx.fillStyle = '#ffffff';
+    ctx.font = '500 22px "Cormorant Garamond", "Palatino Linotype", serif';
+    ctx.fillStyle = '#ece8e0';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.shadowColor = 'rgba(56, 189, 248, 0.9)';
-    ctx.shadowBlur = 10;
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.85)';
+    ctx.shadowBlur = 8;
     ctx.fillText(text, 128, 32);
 
     const texture = new THREE.CanvasTexture(canvas);

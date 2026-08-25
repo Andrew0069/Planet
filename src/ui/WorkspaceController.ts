@@ -188,7 +188,7 @@ export class WorkspaceController {
             ${numberField('lab-star-lum', 'Luminosidad', this.labSystem.star.luminositySolar, 'L☉', 0.0001)}
           </div>
           <div class="lab-buttons">
-            <button class="science-btn primary" id="lab-play-btn">▶ Ejecutar</button>
+            <button class="science-btn primary" id="lab-play-btn">Ejecutar</button>
             <button class="science-btn" id="lab-reset-btn">↺ Reiniciar</button>
             <button class="science-btn" id="lab-rebalance-btn">◎ Reequilibrar órbitas</button>
           </div>
@@ -298,7 +298,7 @@ export class WorkspaceController {
     this.labPlaying = !this.labPlaying;
     await this.nbody.pause(!this.labPlaying);
     const button = document.getElementById('lab-play-btn');
-    if (button) button.textContent = this.labPlaying ? '⏸ Pausar' : '▶ Ejecutar';
+    if (button) button.textContent = this.labPlaying ? 'Pausar' : 'Ejecutar';
     if (this.labPlaying) this.labLoop();
   }
 
@@ -329,7 +329,7 @@ export class WorkspaceController {
     const canvas = document.getElementById('lab-canvas') as HTMLCanvasElement | null;
     if (canvas) drawLabSnapshot(canvas, this.labSystem, this.labSnapshot);
     const playButton = document.getElementById('lab-play-btn');
-    if (playButton) playButton.textContent = this.labPlaying ? '⏸ Pausar' : '▶ Ejecutar';
+    if (playButton) playButton.textContent = this.labPlaying ? 'Pausar' : 'Ejecutar';
     const metrics = document.getElementById('lab-metrics');
     if (metrics) {
       const barycenter = this.labSnapshot.metrics.barycenterM;
@@ -510,6 +510,16 @@ export class WorkspaceController {
       spin: Number(requiredInput('kerr-spin').value),
       inclinationRad: (Number(requiredInput('kerr-inclination').value) * Math.PI) / 180
     };
+  }
+
+  public dispose(): void {
+    this.stopLabLoop();
+    this.kerrRenderer?.dispose();
+    this.kerrRenderer = null;
+    this.kerrWorker?.terminate();
+    this.kerrWorker = null;
+    this.nasaAbort?.abort();
+    this.nbody?.dispose();
   }
 }
 
