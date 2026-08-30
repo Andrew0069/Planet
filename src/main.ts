@@ -24,18 +24,38 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // 4. Render & Simulation Loop
+  // 4. Gestión de visibilidad y foco para ahorro de energía en ejecutable nativo
+  let isAppActive = true;
+  document.addEventListener('visibilitychange', () => {
+    isAppActive = !document.hidden;
+  });
+  window.addEventListener('blur', () => {
+    isAppActive = false;
+  });
+  window.addEventListener('focus', () => {
+    isAppActive = true;
+  });
+
+  // 5. Render & Simulation Loop con throttling inteligente
   let lastDays = timeEngine.getDaysSinceJ2000();
   const startTime = performance.now();
+  let lastFrameTime = performance.now();
 
   function animate() {
     requestAnimationFrame(animate);
+
+    // En segundo plano / minimizado: reducir frecuencia a ~5 FPS para ahorrar CPU/GPU
+    const now = performance.now();
+    if (!isAppActive && now - lastFrameTime < 200) {
+      return;
+    }
+    lastFrameTime = now;
 
     const currentDays = timeEngine.update();
     const deltaDays = currentDays - lastDays;
     lastDays = currentDays;
 
-    const elapsedTime = (performance.now() - startTime) / 1000;
+    const elapsedTime = (now - startTime) / 1000;
 
     // Actualizar escena 3D
     sceneManager.update(currentDays, deltaDays, elapsedTime);
@@ -45,5 +65,5 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   animate();
-  console.log('🌌 Simulador Astrofísico 3D inicializado con éxito.');
+  console.log('🌌 Simulador Astrofísico 3D inicializado con éxito (Optimizado para Escritorio).');
 });

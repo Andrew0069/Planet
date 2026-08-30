@@ -5,38 +5,101 @@ import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPa
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 
 /**
- * Postprocesado del observatorio:
- * - UnrealBloomPass: las fuentes brillantes (Sol, atmósferas, etiquetas) emiten
- *   un halo cinematográfico por encima del umbral de luminancia.
- * - OutputPass: aplica el tone mapping ACES y la corrección sRGB al resultado
- *   final, preservando el pipeline de color del renderer.
+ * Postprocesado del observatorio. El compositor se crea de forma diferida para
+ * que desactivar bloom también libere sus render targets y evite por completo
+ * las pasadas de postprocesado en equipos de bajos recursos.
  */
 export class PostFX {
-  public readonly composer: EffectComposer;
-  public readonly bloomPass: UnrealBloomPass;
+  private readonly renderer: THREE.WebGLRenderer;
+  private readonly scene: THREE.Scene;
+  private readonly camera: THREE.Camera;
+  private composer: EffectComposer | null = null;
+  private bloomEnabled: boolean;
+  private width: number;
+  private height: number;
+  private pixelRatio: number;
 
-  constructor(renderer: THREE.WebGLRenderer, scene: THREE.Scene, camera: THREE.Camera) {
-    const width = renderer.domElement.clientWidth || window.innerWidth;
-    const height = renderer.domElement.clientHeight || window.innerHeight;
+  constructor(
+    renderer: THREE.WebGLRenderer,
+    scene: THREE.Scene,
+    camera: THREE.Camera,
+    bloomEnabled = true
+  ) {
+    this.renderer = renderer;
+    this.scene = scene;
+    this.camera = camera;
+    this.width = renderer.domElement.clientWidth || window.innerWidth;
+    this.height = renderer.domElement.clientHeight || window.innerHeight;
+    this.pixelRatio = renderer.getPixelRatio();
+    this.bloomEnabled = bloomEnabled;
 
-    this.composer = new EffectComposer(renderer);
-    this.composer.addPass(new RenderPass(scene, camera));
+    if (bloomEnabled) this.createComposer();
+  }
 
-    this.bloomPass = new UnrealBloomPass(new THREE.Vector2(width, height), 0.55, 0.6, 0.82);
-    this.composer.addPass(this.bloomPass);
+  public setBloomEnabled(enabled: boolean): void {
+    if (this.bloomEnabled === enabled) return;
 
-    this.composer.addPass(new OutputPass());
+    this.bloomEnabled = enabled;
+    if (enabled) {
+      this.createComposer();
+    } else {
+      this.disposeComposer();
+    }
+  }
+
+  public isBloomEnabled(): boolean {
+    return this.bloomEnabled;
+  }
+
+  public setPixelRatio(pixelRatio: number): void {
+    this.pixelRatio = pixelRatio;
+    this.composer?.setPixelRatio(pixelRatio);
   }
 
   public setSize(width: number, height: number): void {
-    this.composer.setSize(width, height);
+    this.width = width;
+    this.height = height;
+    this.composer?.setSize(width, height);
   }
 
   public render(): void {
-    this.composer.render();
+    if (this.bloomEnabled && this.composer) {
+      this.composer.render();
+      return;
+    }
+
+    this.renderer.render(this.scene, this.camera);
   }
 
   public dispose(): void {
-    this.composer.dispose();
+    this.disposeComposer();
+  }
+
+  private createComposer(): void {
+    if (this.composer) return;
+
+    const composer = new EffectComposer(this.renderer);
+    composer.setPixelRatio(this.pixelRatio);
+    composer.setSize(this.width, this.height);
+    composer.addPass(new RenderPass(this.scene, this.camera));
+
+    const bloomResolution = new THREE.Vector2(
+      Math.max(1, Math.floor(this.width / 2)),
+      Math.max(1, Math.floor(this.height / 2))
+    );
+    const bloomPass = new UnrealBloomPass(
+      bloomResolution,
+      0.55,
+      0.6,
+      0.82
+    );
+    composer.addPass(bloomPass);
+    composer.addPass(new OutputPass());
+    this.composer = composer;
+  }
+
+  private disposeComposer(): void {
+    this.composer?.dispose();
+    this.composer = null;
   }
 }

@@ -169,6 +169,17 @@ export class UIController {
       });
     }
 
+    const chkLowSpec = document.getElementById('chk-low-spec') as HTMLInputElement;
+    if (chkLowSpec) {
+      chkLowSpec.addEventListener('change', () => {
+        if (chkLowSpec.checked) {
+          this.sceneManager.setPerformanceProfile('low-spec');
+        } else {
+          this.sceneManager.setPerformanceProfile('quality');
+        }
+      });
+    }
+
     const chkOrbits = document.getElementById('chk-orbits') as HTMLInputElement;
     if (chkOrbits) {
       chkOrbits.addEventListener('change', () => {

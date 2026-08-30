@@ -11,6 +11,49 @@ import { PostFX } from './PostFX';
 import { Meteors } from './Meteors';
 import { applyMoonVisuals, createMoonOrbitRings } from './MoonFX';
 
+export type PerformanceProfileName = 'quality' | 'low-spec';
+
+export interface ScenePerformanceSettings {
+  lowSpec: boolean;
+  bloomEnabled: boolean;
+  shadowsEnabled: boolean;
+  pixelRatio: number;
+}
+
+export type ScenePerformanceProfile = PerformanceProfileName | Partial<ScenePerformanceSettings>;
+
+function profilePreset(name: PerformanceProfileName): ScenePerformanceSettings {
+  if (name === 'low-spec') {
+    return {
+      lowSpec: true,
+      bloomEnabled: false,
+      shadowsEnabled: false,
+      pixelRatio: 1
+    };
+  }
+
+  return {
+    lowSpec: false,
+    bloomEnabled: true,
+    shadowsEnabled: true,
+    pixelRatio: Math.min(window.devicePixelRatio, 2)
+  };
+}
+
+function resolveProfile(
+  profile: ScenePerformanceProfile,
+  current?: ScenePerformanceSettings
+): ScenePerformanceSettings {
+  if (typeof profile === 'string') return profilePreset(profile);
+
+  const base = profile.lowSpec === undefined
+    ? (current ?? profilePreset('quality'))
+    : profilePreset(profile.lowSpec ? 'low-spec' : 'quality');
+  const pixelRatio = Math.min(2, Math.max(0.5, profile.pixelRatio ?? base.pixelRatio));
+
+  return { ...base, ...profile, pixelRatio };
+}
+
 export class SceneManager {
   public scene: THREE.Scene;
   public camera: THREE.PerspectiveCamera;
@@ -45,6 +88,7 @@ export class SceneManager {
   private meteors: Meteors | null = null;
   private starfield: THREE.Points | null = null;
   private lastElapsed = 0;
+  private performanceSettings: ScenePerformanceSettings;
 
   // Callbacks para eventos con la UI
   public onPlanetSelected?: (planet: PlanetData | null) => void;
@@ -55,8 +99,9 @@ export class SceneManager {
     this.isDragging = false;
   };
 
-  constructor(container: HTMLElement) {
+  constructor(container: HTMLElement, profile: ScenePerformanceProfile = 'quality') {
     this.container = container;
+    this.performanceSettings = resolveProfile(profile);
 
     // 1. Escena
     this.scene = new THREE.Scene();
@@ -71,13 +116,13 @@ export class SceneManager {
     // 3. Renderizador WebGL
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
     this.renderer.setSize(container.clientWidth || window.innerWidth, container.clientHeight || window.innerHeight);
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.renderer.setPixelRatio(this.performanceSettings.pixelRatio);
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.05;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
 
     // 3b. Sombras reales (lunas proyectan sobre planetas, anillos sobre Saturno)
-    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.enabled = this.performanceSettings.shadowsEnabled;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
     container.appendChild(this.renderer.domElement);
@@ -91,8 +136,8 @@ export class SceneManager {
     this.scene.add(this.sun.mesh);
 
     // 5b. La luz del Sol proyecta sombras (mapa de 2048², alcance al sistema interior)
-    this.sun.pointLight.castShadow = true;
-    this.sun.pointLight.shadow.mapSize.set(2048, 2048);
+    this.sun.pointLight.castShadow = this.performanceSettings.shadowsEnabled;
+    this.sun.pointLight.shadow.mapSize.set(1024, 1024);
     this.sun.pointLight.shadow.camera.near = 1.0;
     this.sun.pointLight.shadow.camera.far = 4000;
     // Obligatorio: sin esto la matriz de proyección de la sombra queda obsoleta
@@ -147,7 +192,12 @@ export class SceneManager {
     this.meteors = new Meteors(this.scene);
 
     // 14c. Postprocesado cinematográfico (bloom + tone mapping final)
-    this.postFX = new PostFX(this.renderer, this.scene, this.camera);
+    this.postFX = new PostFX(
+      this.renderer,
+      this.scene,
+      this.camera,
+      this.performanceSettings.bloomEnabled
+    );
 
     // 15. Event Listeners
     this.setupEventListeners();
@@ -589,6 +639,38 @@ export class SceneManager {
   public setSunTemperature(tempK: number): void {
     this.sun.updateTemperature(tempK);
     this.habitableZone.updateForTemperature(tempK);
+  }
+
+  public setPerformanceProfile(profile: ScenePerformanceProfile): void {
+    const next = resolveProfile(profile, this.performanceSettings);
+    this.performanceSettings = next;
+
+    this.setBloomEnabled(next.bloomEnabled);
+    this.setShadowsEnabled(next.shadowsEnabled);
+    this.setPixelRatio(next.pixelRatio);
+  }
+
+  public getPerformanceSettings(): ScenePerformanceSettings {
+    return { ...this.performanceSettings };
+  }
+
+  public setBloomEnabled(enabled: boolean): void {
+    this.performanceSettings.bloomEnabled = enabled;
+    this.postFX?.setBloomEnabled(enabled);
+  }
+
+  public setShadowsEnabled(enabled: boolean): void {
+    this.performanceSettings.shadowsEnabled = enabled;
+    this.renderer.shadowMap.enabled = enabled;
+    this.sun.pointLight.castShadow = enabled;
+  }
+
+  public setPixelRatio(pixelRatio: number): void {
+    const clampedRatio = Math.min(2, Math.max(0.5, pixelRatio));
+    this.performanceSettings.pixelRatio = clampedRatio;
+    this.renderer.setPixelRatio(clampedRatio);
+    this.postFX?.setPixelRatio(clampedRatio);
+    this.handleResize();
   }
 
   public setHabitableZoneVisibility(visible: boolean): void {

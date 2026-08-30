@@ -6,8 +6,11 @@ import { KeplerianEngine } from '../core/physics/KeplerianEngine';
 Chart.register(...registerables);
 
 export class ChartsManager {
+  private static readonly UPDATE_INTERVAL_MS = 300;
+
   private tempChart: Chart | null = null;
   private irradianceChart: Chart | null = null;
+  private lastUpdateMs = Number.NEGATIVE_INFINITY;
 
   constructor(tempCanvasId: string, irradianceCanvasId: string) {
     const tempCanvas = document.getElementById(tempCanvasId) as HTMLCanvasElement;
@@ -46,6 +49,7 @@ export class ChartsManager {
         ]
       },
       options: {
+        animation: false,
         responsive: true,
         maintainAspectRatio: false,
         plugins: {
@@ -98,6 +102,7 @@ export class ChartsManager {
         ]
       },
       options: {
+        animation: false,
         responsive: true,
         maintainAspectRatio: false,
         plugins: {
@@ -127,6 +132,10 @@ export class ChartsManager {
 
   public update(daysSinceJ2000: number, starTempK: number): void {
     if (!this.tempChart || !this.irradianceChart) return;
+
+    const now = performance.now();
+    if (now - this.lastUpdateMs < ChartsManager.UPDATE_INTERVAL_MS) return;
+    this.lastUpdateMs = now;
 
     const surfaceTemps: number[] = [];
     const eqTemps: number[] = [];
