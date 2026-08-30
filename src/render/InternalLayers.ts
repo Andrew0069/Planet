@@ -51,8 +51,4 @@ export class InternalLayers {
   public setVisible(visible: boolean): void {
     this.mesh.visible = visible;
   }
-
-  public getVisible(): boolean {
-    return this.mesh.visible;
-  }
 }

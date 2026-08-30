@@ -56,10 +56,6 @@ export class KerrEngine {
     };
   }
 
-  public static ergosphereRadiusRg(spin: number, theta: number): number {
-    return 1 + Math.sqrt(Math.max(0, 1 - spin * spin * Math.cos(theta) ** 2));
-  }
-
   public static trace(
     parameters: KerrParameters,
     constants: KerrConstants,

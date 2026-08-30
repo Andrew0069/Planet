@@ -5,7 +5,6 @@ import { KeplerianEngine } from '../core/physics/KeplerianEngine';
 export class OrbitsRenderer {
   public group: THREE.Group;
   private orbitLines: Map<string, THREE.Line> = new Map();
-  private isVisible: boolean = true;
 
   constructor(planets: PlanetData[]) {
     this.group = new THREE.Group();
@@ -29,12 +28,7 @@ export class OrbitsRenderer {
   }
 
   public setVisible(visible: boolean): void {
-    this.isVisible = visible;
     this.group.visible = visible;
-  }
-
-  public getVisible(): boolean {
-    return this.isVisible;
   }
 
   public highlightPlanetOrbit(planetId: string | null): void {

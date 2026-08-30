@@ -21,6 +21,11 @@ export class NBodyWorkerClient {
       if (response.ok && response.snapshot) request.resolve(response.snapshot);
       else request.reject(new Error(response.error ?? 'Error desconocido del motor físico.'));
     };
+    this.worker.onerror = (event) => {
+      const error = new Error(event.message || 'El worker del motor físico falló.');
+      for (const request of this.pending.values()) request.reject(error);
+      this.pending.clear();
+    };
   }
 
   public initialize(system: SystemDefinition, config?: Partial<SimulationConfig>): Promise<SimulationSnapshot> {

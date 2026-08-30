@@ -56,6 +56,9 @@ graph TD
     UIController --> Render
 ```
 
+> Nota: el diagrama describe el espacio "Sistema Solar" (legacy). Los espacios Cielo, Atlas,
+> Laboratorio N-cuerpos y Relatividad se detallan en la sección 4.
+
 ---
 
 ## 3. Modelos Matemáticos y Ecuaciones Físicas
@@ -138,14 +141,37 @@ $$r_{\text{capa}} = R_{\text{planeta}} \cdot \left(1 - \frac{\text{profundidad}}
   * `geography.data.ts`: Accidentes topográficos con lat/lon, altitud y relevancia geológica.
   * `star.data.ts`: Clases espectrales estelares (M, K, G, F, A) y temperaturas.
 * `src/render/`:
-  * `SceneManager.ts`: Inicialización de Three.js, render loop, iluminación, sombras y raycasting.
-  * `CelestialBody.ts`: Generación de mallas planetarias, shaders PBR y atmósferas.
+  * `SceneManager.ts`: Inicialización de Three.js, render loop, iluminación, sombras, raycasting y postprocesado.
+  * `CelestialBody.ts`: Generación de mallas planetarias, shaders PBR, atmósferas Fresnel y sombras.
   * `SunBody.ts`: Shaders dinámicos de emisión del Sol según su temperatura en Kelvin.
   * `HabitableZone.ts`: Anillo translúcido con shader radial que delimita la zona habitable.
   * `InternalLayers.ts`: Corte 3D transversal para inspección geológica.
   * `GeographyPins.ts`: Pines interactivos 3D sobre la superficie planetaria.
+  * `PostFX.ts`: Postprocesado con EffectComposer + UnrealBloomPass + OutputPass (halo cinematográfico).
+  * `Meteors.ts`: Estrellas fugaces ocasionales con desvanecimiento aditivo.
 * `src/ui/`:
   * `UIController.ts`: Orquestador de la interfaz de usuario, eventos y modales.
   * `StarControls.ts`: Control interactivo de temperatura solar y tipos de estrella.
   * `PlanetDossier.ts`: Ficha técnica en tiempo real, geología y atmósferas.
   * `ChartsManager.ts`: Gráficos de telemetría con Chart.js.
+
+### 4.1. Módulos de los espacios Cielo, Atlas, Laboratorio y Relatividad
+
+* `src/core/physics/` (adicionales):
+  * `NBodyEngine.ts`: Integrador simpléctico leapfrog en unidades SI (baricéntrico) con detección de colisiones, escapes y métricas de conservación; corre en Web Worker.
+  * `SkyEngine.ts`: Cielo local desde un sitio observador: alt/az, crepúsculos, salidas/ocasos/culminaciones, magnitudes y fases.
+* `src/core/relativity/`:
+  * `KerrEngine.ts`: Métrica de Kerr en unidades geométricas: horizonte, ergosfera, ISCO y geodésicas por RK4 con constantes de movimiento.
+* `src/core/scientific.types.ts`: Modelo SI común (masas, radios, elementos orbitales) y metadatos de procedencia (observada/derivada/simulada/asumida/visual).
+* `src/data/` (adicionales):
+  * `exoplanets.data.ts`: Sistemas exoplanetarios curados (modelo SI y procedencia observada/derivada).
+  * `brightStars.data.ts`: Estrellas brillantes ICRS J2000 para el espacio Cielo.
+* `src/services/` y `src/workers/`:
+  * `NasaExoplanetClient.ts` (consulta TAP al NASA Exoplanet Archive), `NBodyWorkerClient.ts`, `nbody.worker.ts`, `kerr.worker.ts`: consulta remota y cómputo pesado fuera del hilo principal.
+* `src/render/` (adicionales):
+  * `SkyRenderer.ts`: Render 3D del cielo local (horizonte, astros, trayectorias).
+  * `MoonFX.ts`: Texturas procedurales de lunas y anillos de órbita (ver GRAPHICS_LAYER.md).
+  * `catalogTextures.ts`: Carga de texturas NASA desde `/textures` con fallback procedural.
+* `src/ui/` (adicionales):
+  * `WorkspaceController.ts`: Orquestador de los espacios Sistema Solar, Cielo, Atlas, Laboratorio y Relatividad.
+  * `KerrRenderer.ts`: Visualización GPU aproximada del laboratorio Kerr.

@@ -18,7 +18,7 @@ export class KeplerianEngine {
 
   /**
    * Escala de compresión de distancia radial para visualización didáctica 3D.
-   * Utiliza una escala exponencial suave (d^0.65) para que los planetas exteriores
+   * Utiliza una escala exponencial suave (d^0.62) para que los planetas exteriores
    * (Júpiter a Neptuno) sean visibles sin dejar los planetas interiores invisibles.
    */
   public static scaleAUToScene(distanceAU: number): number {

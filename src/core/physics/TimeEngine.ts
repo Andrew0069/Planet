@@ -27,10 +27,6 @@ export class TimeEngine {
     return this.currentDaysSinceJ2000;
   }
 
-  public setDaysSinceJ2000(days: number): void {
-    this.currentDaysSinceJ2000 = days;
-  }
-
   public getCurrentDate(): Date {
     return new Date(TimeEngine.J2000_EPOCH_MS + this.currentDaysSinceJ2000 * 86400000);
   }

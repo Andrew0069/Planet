@@ -68,8 +68,4 @@ export class GeographyPins {
   public setVisible(visible: boolean): void {
     this.mesh.visible = visible;
   }
-
-  public getVisible(): boolean {
-    return this.mesh.visible;
-  }
 }

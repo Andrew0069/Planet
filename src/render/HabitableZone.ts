@@ -7,7 +7,6 @@ export class HabitableZone {
   private ringMesh: THREE.Mesh;
   private innerLine: THREE.LineLoop;
   private outerLine: THREE.LineLoop;
-  private isVisible: boolean = true;
 
   constructor() {
     this.mesh = new THREE.Group();
@@ -76,11 +75,6 @@ export class HabitableZone {
   }
 
   public setVisible(visible: boolean): void {
-    this.isVisible = visible;
     this.mesh.visible = visible;
-  }
-
-  public getVisible(): boolean {
-    return this.isVisible;
   }
 }

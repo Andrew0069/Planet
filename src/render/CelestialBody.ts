@@ -6,6 +6,15 @@ import { InternalLayers } from './InternalLayers';
 import { GeographyPins } from './GeographyPins';
 
 export class CelestialBody {
+  /**
+   * Escala visual global de las rotaciones. Las proporciones relativas entre cuerpos
+   * son físicas (periodos de rotación NASA en horas); esta constante solo reduce la
+   * velocidad percibida para que a la velocidad de simulación por defecto (3 d/s) el
+   * giro sea apreciable pero no vertiginoso: Tierra ~1 vuelta/6 s, Júpiter ~1/2.5 s,
+   * Ío ~1 órbita/10 s, Fobos ~1 órbita/2 s. Es el único "knob" para frenar/acelerar.
+   */
+  private static readonly ROTATION_VISUAL_SCALE = 0.06;
+
   public data: PlanetData;
   public group: THREE.Group;              // Grupo posicionado en coordenadas orbitales
   public axialTiltGroup: THREE.Group;    // Inclinado según la oblicuidad del eje
@@ -33,7 +42,7 @@ export class CelestialBody {
     this.group.add(this.axialTiltGroup);
 
     // 3. Generación de texturas de alta resolución fotorrealistas
-    const { surfaceTex, bumpTex, specularTex } = this.generatePhotorealisticTextures(data);
+    const { surfaceTex, specularTex } = this.generatePhotorealisticTextures(data);
 
     // 4. Malla principal (Esfera o Elipsoide de Jacobi si es Haumea)
     const geometry = new THREE.SphereGeometry(this.sceneRadius, 64, 64);
@@ -43,7 +52,6 @@ export class CelestialBody {
 
     const material = new THREE.MeshStandardMaterial({
       map: surfaceTex,
-      bumpMap: bumpTex || undefined,
       bumpScale: 0.05,
       roughness: data.id === 'earth' ? 0.45 : (data.type === 'terrestrial' || data.type === 'dwarf' ? 0.85 : 0.4),
       metalness: data.id === 'mercury' || data.id === 'ceres' ? 0.2 : 0.05
@@ -56,6 +64,10 @@ export class CelestialBody {
     this.planetMesh = new THREE.Mesh(geometry, material);
     this.axialTiltGroup.add(this.planetMesh);
     applyCatalogTexture(data.id, material);
+
+    // Sombras: el planeta recibe y proyecta (las lunas proyectan sobre él)
+    this.planetMesh.castShadow = true;
+    this.planetMesh.receiveShadow = true;
 
     // 5. Capa de Nubes atmosférica independiente (Tierra)
     if (data.id === 'earth') {
@@ -71,20 +83,18 @@ export class CelestialBody {
       this.cloudsMesh = new THREE.Mesh(cloudsGeo, cloudsMat);
       this.axialTiltGroup.add(this.cloudsMesh);
       applyEarthClouds(cloudsMat);
+      this.cloudsMesh.castShadow = false;
+      this.cloudsMesh.receiveShadow = true;
     }
 
-    // 6. Resplandor Atmosférico (Fresnel Glow)
+    // 6. Resplandor Atmosférico (Shader Fresnel dependiente del ángulo de visión)
     if (data.atmosphere.surfacePressureAtm > 0.001) {
-      const atmoGeo = new THREE.SphereGeometry(this.sceneRadius * 1.05, 48, 48);
-      if (data.isEllipsoid) atmoGeo.scale(1.4, 0.9, 1.15);
-      const atmoMat = new THREE.MeshBasicMaterial({
-        color: new THREE.Color(data.atmosphere.colorHex),
-        transparent: true,
-        opacity: 0.32,
-        blending: THREE.AdditiveBlending,
-        side: THREE.BackSide
-      });
-      this.atmosphereMesh = new THREE.Mesh(atmoGeo, atmoMat);
+      this.atmosphereMesh = this.createAtmosphereGlow(
+        this.sceneRadius,
+        data.atmosphere.colorHex,
+        data.atmosphere.surfacePressureAtm,
+        Boolean(data.isEllipsoid)
+      );
       this.axialTiltGroup.add(this.atmosphereMesh);
     }
 
@@ -92,6 +102,9 @@ export class CelestialBody {
     if (data.ringSystem) {
       this.ringsMesh = this.createRingsMesh(this.sceneRadius, data.ringSystem);
       this.axialTiltGroup.add(this.ringsMesh);
+      // Los anillos proyectan sombra sobre el planeta y la reciben de las lunas
+      this.ringsMesh.castShadow = true;
+      this.ringsMesh.receiveShadow = true;
     }
 
     // 8. Capas geológicas internas (Corte 3D)
@@ -129,6 +142,61 @@ export class CelestialBody {
     } else {
       return 0.5 + Math.pow(radiusKm / 6371, 0.5) * 0.65;
     }
+  }
+
+  /**
+   * Resplandor atmosférico con shader Fresnel: la intensidad del halo depende
+   * del ángulo entre la normal y la dirección de visión, creando un borde
+   * luminoso realista (estilo "rim glow") en lugar de una esfera aditiva plana.
+   * La densidad y el alcance escalan con la presión superficial del planeta.
+   */
+  private createAtmosphereGlow(
+    sceneRadius: number,
+    colorHex: string,
+    surfacePressureAtm: number,
+    ellipsoid: boolean
+  ): THREE.Mesh {
+    // Escala logarítmica: Tierra ~1 atm, Venus ~92 atm, gigantes ~100-1000 atm
+    const pressureFactor = Math.min(1, Math.log10(1 + surfacePressureAtm) / Math.log10(93));
+    const radiusScale = 1 + 0.13 * pressureFactor;
+    const intensity = 0.22 + 0.9 * Math.sqrt(pressureFactor);
+
+    const geometry = new THREE.SphereGeometry(sceneRadius * radiusScale, 48, 48);
+    if (ellipsoid) geometry.scale(1.4, 0.9, 1.15);
+
+    const material = new THREE.ShaderMaterial({
+      uniforms: {
+        uGlowColor: { value: new THREE.Color(colorHex) },
+        uPower: { value: 3.2 },
+        uIntensity: { value: intensity },
+        uOpacity: { value: 0.85 }
+      },
+      vertexShader: `
+        varying vec3 vNormal;
+        void main() {
+          vNormal = normalize(normalMatrix * normal);
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: `
+        varying vec3 vNormal;
+        uniform vec3 uGlowColor;
+        uniform float uPower;
+        uniform float uIntensity;
+        uniform float uOpacity;
+        void main() {
+          // Borde luminoso: máximo cuando la normal es perpendicular a la vista
+          float rim = pow(max(0.0, 0.72 - dot(vNormal, vec3(0.0, 0.0, 1.0))), uPower);
+          gl_FragColor = vec4(uGlowColor * rim * uIntensity * uOpacity, rim * uIntensity * uOpacity);
+        }
+      `,
+      side: THREE.BackSide,
+      blending: THREE.AdditiveBlending,
+      transparent: true,
+      depthWrite: false
+    });
+
+    return new THREE.Mesh(geometry, material);
   }
 
   private createRingsMesh(
@@ -226,7 +294,12 @@ export class CelestialBody {
 
       const moonMesh = new THREE.Mesh(moonGeo, moonMat);
       moonMesh.position.set(orbitDistance, 0, 0);
-      this.group.add(moonMesh);
+      // Las lunas orbitan en el plano ecuatorial del planeta (grupo de inclinación axial),
+      // como en el sistema real: las órbitas lunares están cerca del ecuador planetario.
+      this.axialTiltGroup.add(moonMesh);
+      // Las lunas proyectan sombra sobre el planeta y la reciben del Sol
+      moonMesh.castShadow = true;
+      moonMesh.receiveShadow = true;
 
       this.moonMeshes.push({
         mesh: moonMesh,
@@ -275,7 +348,6 @@ export class CelestialBody {
 
   private generatePhotorealisticTextures(planet: PlanetData): {
     surfaceTex: THREE.CanvasTexture;
-    bumpTex: THREE.CanvasTexture | null;
     specularTex: THREE.CanvasTexture | null;
   } {
     const canvas = document.createElement('canvas');
@@ -286,7 +358,6 @@ export class CelestialBody {
     const w = canvas.width;
     const h = canvas.height;
 
-    let bumpCanvas: HTMLCanvasElement | null = null;
     let specularCanvas: HTMLCanvasElement | null = null;
 
     if (planet.id === 'earth') {
@@ -601,26 +672,35 @@ export class CelestialBody {
     surfaceTex.wrapS = THREE.RepeatWrapping;
     surfaceTex.wrapT = THREE.ClampToEdgeWrapping;
 
-    const bumpTex = bumpCanvas ? new THREE.CanvasTexture(bumpCanvas) : null;
     const specularTex = specularCanvas ? new THREE.CanvasTexture(specularCanvas) : null;
 
-    return { surfaceTex, bumpTex, specularTex };
+    return { surfaceTex, specularTex };
   }
 
-  public update(deltaDays: number, _totalDays?: number): void {
-    const hoursPerDay = 24.0;
-    const rotationSpeed = (deltaDays * hoursPerDay) / this.data.rotationPeriodHours;
-    this.planetMesh.rotation.y += rotationSpeed * Math.PI * 2 * 0.1;
+  public update(deltaDays: number): void {
+    const scale = CelestialBody.ROTATION_VISUAL_SCALE;
 
+    // Giro axial del planeta: periodo de rotación NASA en horas.
+    // Valores negativos (Venus, Urano, Plutón) giran en sentido retrógrado.
+    const spinTurns = ((deltaDays * 24) / this.data.rotationPeriodHours) * scale;
+    this.planetMesh.rotation.y += spinTurns * Math.PI * 2;
+
+    // Nubes terrestres: arrastradas por vientos ~15% más rápidos que la superficie
     if (this.cloudsMesh) {
-      this.cloudsMesh.rotation.y += rotationSpeed * Math.PI * 2 * 0.115;
+      this.cloudsMesh.rotation.y += spinTurns * Math.PI * 2 * 1.15;
     }
 
     this.moonMeshes.forEach((moon) => {
-      const angleDelta = (deltaDays / moon.periodDays) * Math.PI * 2;
+      // Revolución orbital: periodo orbital NASA en días (negativo = retrógrada, p. ej. Tritón)
+      const angleDelta = ((deltaDays / moon.periodDays) * Math.PI * 2) * scale;
       moon.angle += angleDelta;
       moon.mesh.position.x = Math.cos(moon.angle) * moon.orbitRadius;
       moon.mesh.position.z = Math.sin(moon.angle) * moon.orbitRadius;
+
+      // Rotación propia por acoplamiento de marea (rotación síncrona): la luna siempre
+      // muestra la misma cara al planeta. El signo se invierte solo en órbitas retrógradas
+      // (Tritón), que también están acopladas por marea a su planeta.
+      moon.mesh.rotation.y = -moon.angle;
     });
   }
 

@@ -8,7 +8,6 @@ export class SunBody {
   private coronaMesh: THREE.Mesh;
   private outerGlowMesh: THREE.Mesh;
   private flareRaysMesh: THREE.Mesh;
-  private currentTempK: number = 5778;
   private plasmaTextureCanvas: HTMLCanvasElement;
   private plasmaTexture: THREE.CanvasTexture;
   private plasmaCtx: CanvasRenderingContext2D;
@@ -204,7 +203,6 @@ export class SunBody {
   }
 
   public updateTemperature(tempK: number): void {
-    this.currentTempK = tempK;
     this.renderSolarSurface(tempK);
 
     const colorData = ThermodynamicsEngine.getStarColorFromTemp(tempK);
@@ -241,7 +239,4 @@ export class SunBody {
     }
   }
 
-  public getTemperature(): number {
-    return this.currentTempK;
-  }
 }

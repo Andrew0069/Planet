@@ -186,10 +186,12 @@ export class WorkspaceController {
   }
 
   private commitSkySite(): void {
+    const lat = Number(requiredInput('sky-lat').value);
+    const lon = Number(requiredInput('sky-lon').value);
     this.skySite = {
       ...this.skySite,
-      latitudeDeg: Number(requiredInput('sky-lat').value),
-      longitudeDeg: Number(requiredInput('sky-lon').value),
+      latitudeDeg: Number.isFinite(lat) ? Math.min(90, Math.max(-90, lat)) : this.skySite.latitudeDeg,
+      longitudeDeg: Number.isFinite(lon) ? Math.min(180, Math.max(-180, lon)) : this.skySite.longitudeDeg,
     };
     SkyEngine.saveSite(this.skySite);
     this.skyDidFrame = false;
@@ -340,6 +342,7 @@ export class WorkspaceController {
     if (!status) return;
     this.nasaAbort?.abort();
     this.nasaAbort = new AbortController();
+    const timeoutId = window.setTimeout(() => this.nasaAbort?.abort(), 20_000);
     status.textContent = 'Consultando NASA Exoplanet Archive…';
     status.className = 'science-status loading';
     try {
@@ -354,8 +357,13 @@ export class WorkspaceController {
       const nextStatus = document.getElementById('atlas-status');
       if (nextStatus) nextStatus.textContent = `Actualizado desde NASA · ${new Date().toLocaleTimeString()}`;
     } catch (error) {
-      status.textContent = `Sin actualización: ${error instanceof Error ? error.message : String(error)} · se conserva el catálogo local.`;
+      const message = error instanceof DOMException && error.name === 'AbortError'
+        ? 'la consulta a NASA tardó demasiado (20 s)'
+        : error instanceof Error ? error.message : String(error);
+      status.textContent = `Sin actualización: ${message} · se conserva el catálogo local.`;
       status.className = 'science-status warning';
+    } finally {
+      clearTimeout(timeoutId);
     }
   }
 
@@ -699,18 +707,6 @@ export class WorkspaceController {
     };
   }
 
-  public dispose(): void {
-    this.stopLabLoop();
-    this.stopSkyLoop();
-    this.skyRenderer?.dispose();
-    this.skyRenderer = null;
-    this.kerrRenderer?.dispose();
-    this.kerrRenderer = null;
-    this.kerrWorker?.terminate();
-    this.kerrWorker = null;
-    this.nasaAbort?.abort();
-    this.nbody?.dispose();
-  }
 }
 
 function skyShellHtml(site: ObserverSite, date: Date, live: boolean): string {
@@ -866,6 +862,22 @@ function createLabPlanet(index: number): OrbitalBody {
   };
 }
 
+/**
+ * Resuelve la ecuación de Kepler (E - e·sinE = M) por Newton-Raphson y
+ * devuelve la anomalía verdadera ν. Misma física que KeplerianEngine (3D).
+ */
+function trueAnomalyFromMeanAnomaly(meanAnomalyRad: number, eccentricity: number): number {
+  const e = Math.min(0.99, Math.max(0, eccentricity));
+  const M = meanAnomalyRad % (Math.PI * 2);
+  let E = e < 0.8 ? M : Math.PI;
+  for (let i = 0; i < 12; i++) {
+    const delta = (E - e * Math.sin(E) - M) / (1 - e * Math.cos(E));
+    E -= delta;
+    if (Math.abs(delta) < 1e-8) break;
+  }
+  return 2 * Math.atan2(Math.sqrt(1 + e) * Math.sin(E / 2), Math.sqrt(1 - e) * Math.cos(E / 2));
+}
+
 function drawSystemDiagram(canvas: HTMLCanvasElement, system: SystemDefinition): void {
   const { context, width, height } = setupCanvas(canvas);
   context.clearRect(0, 0, width, height);
@@ -879,13 +891,33 @@ function drawSystemDiagram(canvas: HTMLCanvasElement, system: SystemDefinition):
   const outer = radial(hz.outerM / SI.AU_M);
   context.strokeStyle = 'rgba(34,197,94,.25)'; context.lineWidth = Math.max(2, outer - inner);
   context.beginPath(); context.arc(0, 0, (inner + outer) / 2, 0, Math.PI * 2); context.stroke();
-  system.bodies.forEach((body, index) => {
-    const radius = radial(body.elements.semiMajorAxisM / SI.AU_M);
+  system.bodies.forEach((body) => {
+    const aAU = body.elements.semiMajorAxisM / SI.AU_M;
+    const e = body.elements.eccentricity;
+    // Dirección del perihelio (longitud del perihelio ϖ = Ω + ω) con la estrella en el foco
+    const periDir = (body.elements.ascendingNodeRad ?? 0) + (body.elements.argumentOfPeriapsisRad ?? 0);
+    // La compresión radial logarítmica deforma la elipse: hay que trazar la
+    // órbita punto a punto (anomalía verdadera → r(ν) → compresión) para que
+    // la línea coincida exactamente con la posición del cuerpo.
     context.strokeStyle = 'rgba(112,151,205,.25)'; context.lineWidth = 1;
-    context.beginPath(); context.ellipse(0, 0, radius, radius * Math.sqrt(1 - body.elements.eccentricity ** 2), 0, 0, Math.PI * 2); context.stroke();
-    const angle = body.elements.meanAnomalyAtEpochRad + index * 0.9;
+    context.beginPath();
+    for (let s = 0; s <= 128; s++) {
+      const nu = (s / 128) * Math.PI * 2;
+      const rAU = (aAU * (1 - e * e)) / (1 + e * Math.cos(nu));
+      const rr = radial(rAU);
+      const x = Math.cos(nu + periDir) * rr;
+      const y = Math.sin(nu + periDir) * rr;
+      if (s === 0) context.moveTo(x, y); else context.lineTo(x, y);
+    }
+    context.closePath(); context.stroke();
+    // Posición real del cuerpo: resolver la ecuación de Kepler desde la
+    // anomalía media de época y colocarlo SOBRE su órbita (misma compresión).
+    const nuNow = trueAnomalyFromMeanAnomaly(body.elements.meanAnomalyAtEpochRad, e);
+    const rNow = radial((aAU * (1 - e * e)) / (1 + e * Math.cos(nuNow)));
+    const px = Math.cos(nuNow + periDir) * rNow;
+    const py = Math.sin(nuNow + periDir) * rNow;
     context.fillStyle = body.colorHex; context.shadowColor = body.colorHex; context.shadowBlur = 8;
-    context.beginPath(); context.arc(Math.cos(angle) * radius, Math.sin(angle) * radius, Math.max(3, Math.min(8, Math.log10(body.radiusM / SI.EARTH_RADIUS_M + 1) * 5)), 0, Math.PI * 2); context.fill();
+    context.beginPath(); context.arc(px, py, Math.max(3, Math.min(8, Math.log10(body.radiusM / SI.EARTH_RADIUS_M + 1) * 5)), 0, Math.PI * 2); context.fill();
   });
   context.fillStyle = system.star.colorHex; context.shadowColor = system.star.colorHex; context.shadowBlur = 24;
   context.beginPath(); context.arc(0, 0, 10, 0, Math.PI * 2); context.fill(); context.restore();

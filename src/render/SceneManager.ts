@@ -7,6 +7,9 @@ import { SunBody } from './SunBody';
 import { CelestialBody } from './CelestialBody';
 import { HabitableZone } from './HabitableZone';
 import { OrbitsRenderer } from './OrbitsRenderer';
+import { PostFX } from './PostFX';
+import { Meteors } from './Meteors';
+import { applyMoonVisuals, createMoonOrbitRings } from './MoonFX';
 
 export class SceneManager {
   public scene: THREE.Scene;
@@ -25,6 +28,7 @@ export class SceneManager {
   // Controles de cámara orbital y seguimiento
   private cameraTarget: THREE.Vector3 = new THREE.Vector3(0, 0, 0);
   private followedBody: CelestialBody | null = null;
+  private cutawayBody: CelestialBody | null = null;
   private isDragging: boolean = false;
   private previousMousePosition: { x: number; y: number } = { x: 0, y: 0 };
   private sphericalCoords: THREE.Spherical = new THREE.Spherical(95, Math.PI / 2.8, Math.PI / 4.5);
@@ -35,6 +39,12 @@ export class SceneManager {
   private oortCloudGroup: THREE.Group = new THREE.Group();
   private constellationGroup: THREE.Group = new THREE.Group();
   private celestialGrid: THREE.GridHelper | null = null;
+
+  // Postprocesado (bloom) y estrellas fugaces
+  private postFX: PostFX | null = null;
+  private meteors: Meteors | null = null;
+  private starfield: THREE.Points | null = null;
+  private lastElapsed = 0;
 
   // Callbacks para eventos con la UI
   public onPlanetSelected?: (planet: PlanetData | null) => void;
@@ -65,6 +75,11 @@ export class SceneManager {
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.05;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+    // 3b. Sombras reales (lunas proyectan sobre planetas, anillos sobre Saturno)
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
     container.appendChild(this.renderer.domElement);
 
     // 4. Iluminación ambiental
@@ -74,6 +89,20 @@ export class SceneManager {
     // 5. Sol
     this.sun = new SunBody(3.2);
     this.scene.add(this.sun.mesh);
+
+    // 5b. La luz del Sol proyecta sombras (mapa de 2048², alcance al sistema interior)
+    this.sun.pointLight.castShadow = true;
+    this.sun.pointLight.shadow.mapSize.set(2048, 2048);
+    this.sun.pointLight.shadow.camera.near = 1.0;
+    this.sun.pointLight.shadow.camera.far = 4000;
+    // Obligatorio: sin esto la matriz de proyección de la sombra queda obsoleta
+    // en los valores por defecto (0.5/500) y los objetos lejanos se recortan.
+    this.sun.pointLight.shadow.camera.updateProjectionMatrix();
+    // El bias está normalizado por (far - near) ≈ 3999: -0.0004 desplazaba las
+    // sombras ~1.6 unidades de mundo (peter-panning). Se usa un bias mínimo
+    // (~0.04 u) y normalBias (unidades de mundo) contra el acné de sombra.
+    this.sun.pointLight.shadow.bias = -0.00001;
+    this.sun.pointLight.shadow.normalBias = 0.03;
 
     // 6. Zona de Habitabilidad 3D
     this.habitableZone = new HabitableZone();
@@ -89,6 +118,12 @@ export class SceneManager {
       this.planets.set(pData.id, celestial);
       this.scene.add(celestial.group);
     });
+
+    // 8b. Capa de mejora gráfica (MoonFX): texturas procedurales de lunas
+    // y anillos de órbita sutiles en el plano ecuatorial de cada planeta.
+    const celestialBodies = Array.from(this.planets.values());
+    applyMoonVisuals(celestialBodies);
+    createMoonOrbitRings(celestialBodies);
 
     // 9. Rejilla Cósmica de la Eclíptica
     this.createCelestialGrid();
@@ -107,6 +142,12 @@ export class SceneManager {
 
     // 14. Fondo de 3,500 estrellas
     this.createStarfield(3500);
+
+    // 14b. Estrellas fugaces ocasionales
+    this.meteors = new Meteors(this.scene);
+
+    // 14c. Postprocesado cinematográfico (bloom + tone mapping final)
+    this.postFX = new PostFX(this.renderer, this.scene, this.camera);
 
     // 15. Event Listeners
     this.setupEventListeners();
@@ -328,6 +369,8 @@ export class SceneManager {
     const geo = new THREE.BufferGeometry();
     const positions = new Float32Array(count * 3);
     const colors = new Float32Array(count * 3);
+    const phases = new Float32Array(count);
+    const speeds = new Float32Array(count);
 
     for (let i = 0; i < count; i++) {
       const radius = 1200 + Math.random() * 2500;
@@ -338,24 +381,63 @@ export class SceneManager {
       positions[i * 3 + 1] = radius * Math.sin(phi) * Math.sin(theta);
       positions[i * 3 + 2] = radius * Math.cos(phi);
 
-      const colorVal = 0.8 + Math.random() * 0.2;
-      colors[i * 3] = colorVal;
-      colors[i * 3 + 1] = colorVal * (0.9 + Math.random() * 0.1);
-      colors[i * 3 + 2] = 1.0;
+      // Temperatura de color ligera (blanco-azuladas a blanco-cálidas)
+      const warmth = Math.random();
+      const base = 0.78 + Math.random() * 0.22;
+      colors[i * 3] = base;
+      colors[i * 3 + 1] = base * (0.94 + warmth * 0.06);
+      colors[i * 3 + 2] = base * (0.92 + (1 - warmth) * 0.08);
+
+      phases[i] = Math.random() * Math.PI * 2;
+      speeds[i] = 0.6 + Math.random() * 2.4;
     }
 
     geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    geo.setAttribute('aPhase', new THREE.BufferAttribute(phases, 1));
+    geo.setAttribute('aSpeed', new THREE.BufferAttribute(speeds, 1));
 
-    const mat = new THREE.PointsMaterial({
-      size: 1.8,
-      vertexColors: true,
+    const material = new THREE.ShaderMaterial({
+      uniforms: {
+        uTime: { value: 0 },
+        uSize: { value: 1.9 },
+        uScale: { value: Math.max(1, this.container.clientHeight) * 0.5 }
+      },
+      vertexShader: `
+        attribute vec3 color;
+        attribute float aPhase;
+        attribute float aSpeed;
+        uniform float uTime;
+        uniform float uSize;
+        uniform float uScale;
+        varying vec3 vColor;
+        varying float vTwinkle;
+        void main() {
+          vColor = color;
+          vTwinkle = 0.7 + 0.3 * sin(uTime * aSpeed + aPhase);
+          vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+          gl_PointSize = uSize * (uScale / -mvPosition.z);
+          gl_Position = projectionMatrix * mvPosition;
+        }
+      `,
+      fragmentShader: `
+        varying vec3 vColor;
+        varying float vTwinkle;
+        void main() {
+          vec2 uv = gl_PointCoord - 0.5;
+          float d = length(uv);
+          if (d > 0.5) discard;
+          float alpha = smoothstep(0.5, 0.08, d);
+          gl_FragColor = vec4(vColor * vTwinkle, alpha * 0.9);
+        }
+      `,
       transparent: true,
-      opacity: 0.85
+      depthWrite: false,
+      blending: THREE.AdditiveBlending
     });
 
-    const starfield = new THREE.Points(geo, mat);
-    this.scene.add(starfield);
+    this.starfield = new THREE.Points(geo, material);
+    this.scene.add(this.starfield);
   }
 
   private setupEventListeners(): void {
@@ -465,6 +547,11 @@ export class SceneManager {
   }
 
   public selectPlanet(planetId: string | null): void {
+    const next = planetId ? (this.planets.get(planetId) ?? null) : null;
+    if (this.cutawayBody && this.cutawayBody !== next) {
+      this.cutawayBody.setGeologyCutawayMode(false);
+      this.cutawayBody = null;
+    }
     if (!planetId) {
       this.followedBody = null;
       this.cameraTarget.set(0, 0, 0);
@@ -523,6 +610,10 @@ export class SceneManager {
   public setGeologyCutawayForSelected(enabled: boolean): void {
     if (this.followedBody) {
       this.followedBody.setGeologyCutawayMode(enabled);
+      this.cutawayBody = enabled ? this.followedBody : null;
+    } else if (!enabled && this.cutawayBody) {
+      this.cutawayBody.setGeologyCutawayMode(false);
+      this.cutawayBody = null;
     }
   }
 
@@ -533,6 +624,9 @@ export class SceneManager {
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(width, height);
+    this.postFX?.setSize(width, height);
+    const material = this.starfield?.material as THREE.ShaderMaterial | undefined;
+    if (material?.uniforms?.uScale) material.uniforms.uScale.value = height * 0.5;
   }
 
   public update(daysSinceJ2000: number, deltaDays: number, elapsedTime: number): void {
@@ -545,17 +639,19 @@ export class SceneManager {
     this.planets.forEach((celestial) => {
       const orbitalData = KeplerianEngine.calculatePosition(celestial.data.elements, daysSinceJ2000);
       celestial.group.position.copy(orbitalData.positionScene);
-      celestial.update(deltaDays, daysSinceJ2000);
+      celestial.update(deltaDays);
     });
 
+    // Estrellas con twinkle y estrellas fugaces (tiempo real, no simulado)
+    const material = this.starfield?.material as THREE.ShaderMaterial | undefined;
+    if (material?.uniforms?.uTime) material.uniforms.uTime.value = elapsedTime;
+    const realDt = Math.min(elapsedTime - this.lastElapsed, 0.1);
+    this.lastElapsed = elapsedTime;
+    this.meteors?.update(realDt);
+
     this.updateCameraPosition();
-    this.renderer.render(this.scene, this.camera);
+    if (this.postFX) this.postFX.render();
+    else this.renderer.render(this.scene, this.camera);
   }
 
-  public dispose(): void {
-    window.removeEventListener('resize', this.onWindowResize);
-    window.removeEventListener('mouseup', this.onWindowMouseUp);
-    this.renderer.dispose();
-    this.renderer.domElement.remove();
-  }
 }

@@ -96,16 +96,16 @@ export class SkyEngine {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (!raw) return { ...SANTA_TECLA };
       const parsed = JSON.parse(raw) as Partial<ObserverSite>;
+      const lat = Number(parsed.latitudeDeg);
+      const lon = Number(parsed.longitudeDeg);
+      const elev = Number(parsed.elevationM);
+      const utc = Number(parsed.utcOffsetHours);
       return {
         name: parsed.name?.trim() || SANTA_TECLA.name,
-        latitudeDeg: clamp(Number(parsed.latitudeDeg), -90, 90) || SANTA_TECLA.latitudeDeg,
-        longitudeDeg: clamp(Number(parsed.longitudeDeg), -180, 180) || SANTA_TECLA.longitudeDeg,
-        elevationM: Number.isFinite(Number(parsed.elevationM))
-          ? Number(parsed.elevationM)
-          : SANTA_TECLA.elevationM,
-        utcOffsetHours: Number.isFinite(Number(parsed.utcOffsetHours))
-          ? Number(parsed.utcOffsetHours)
-          : SANTA_TECLA.utcOffsetHours,
+        latitudeDeg: Number.isFinite(lat) ? clamp(lat, -90, 90) : SANTA_TECLA.latitudeDeg,
+        longitudeDeg: Number.isFinite(lon) ? clamp(lon, -180, 180) : SANTA_TECLA.longitudeDeg,
+        elevationM: Number.isFinite(elev) ? elev : SANTA_TECLA.elevationM,
+        utcOffsetHours: Number.isFinite(utc) ? utc : SANTA_TECLA.utcOffsetHours,
       };
     } catch {
       return { ...SANTA_TECLA };
@@ -419,7 +419,7 @@ function eclipticToEquatorial(v: Vec3): { raDeg: number; decDeg: number } {
 function visualMagnitude(id: string, rAU: number, deltaAU: number, phaseAngleDeg: number): number {
   if (id === "moon") {
     const a = Math.abs(phaseAngleDeg);
-    return 0.213 * a + 4e-9 * a ** 4 - 12.73;
+    return 0.026 * a + 4e-9 * a ** 4 - 12.73;
   }
   const H = PLANET_H[id];
   if (H == null) return 99;
