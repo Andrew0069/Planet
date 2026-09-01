@@ -1,7 +1,11 @@
 import * as THREE from "three";
 import { SkyEngine, type SkyObject, type SkyObservation, type TwilightState } from "../core/physics/SkyEngine";
+import { CONSTELLATIONS } from "../data/constellations.data";
+import type { DeepSkyType } from "../data/deepSky.data";
 
 const RADIUS = 28;
+const MIN_FOV = 0.8;
+const MAX_FOV = 92;
 
 export class SkyRenderer {
   private readonly renderer: THREE.WebGLRenderer;
@@ -16,6 +20,9 @@ export class SkyRenderer {
   private readonly horizon: THREE.Line;
   private eclipticLine: THREE.Line | null = null;
   private equatorLine: THREE.Line | null = null;
+  private constellationLines: THREE.LineSegments | null = null;
+  private readonly constellationLabels = new Map<string, THREE.Sprite>();
+  private showConstellations = true;
   private readonly raycaster = new THREE.Raycaster();
   private readonly pointer = new THREE.Vector2();
   private readonly resizeObserver: ResizeObserver;
@@ -67,6 +74,7 @@ export class SkyRenderer {
     this.addCardinal("E", 90);
     this.addCardinal("S", 180);
     this.addCardinal("O", 270);
+    this.buildAltAzGrid();
 
     this.faintStars = this.makeFaintStars();
     this.root.add(this.faintStars);
@@ -76,6 +84,18 @@ export class SkyRenderer {
     this.resize();
     this.bindInput();
     this.applyCamera();
+  }
+
+  public setConstellationsVisible(visible: boolean): void {
+    this.showConstellations = visible;
+    if (this.constellationLines) this.constellationLines.visible = visible;
+    this.constellationLabels.forEach((sprite) => {
+      sprite.visible = visible && sprite.userData.anchored === true;
+    });
+  }
+
+  public getFovDeg(): number {
+    return this.fov;
   }
 
   public setView(azimuthDeg: number, altitudeDeg: number): void {
@@ -101,6 +121,7 @@ export class SkyRenderer {
     for (const obj of observation.objects) {
       this.upsertObject(obj, selectedId, observation.twilight);
     }
+    this.syncConstellations();
     this.applyCamera();
     this.renderer.render(this.scene, this.camera);
   }
@@ -115,7 +136,7 @@ export class SkyRenderer {
   private upsertObject(obj: SkyObject, selectedId: string | null, twilight: TwilightState): void {
     let mesh = this.objectMeshes.get(obj.id);
     if (!mesh) {
-      mesh = makeDisc(obj.colorHex, obj.kind);
+      mesh = obj.kind === "deepsky" ? makeDeepSkySymbol(obj.colorHex, obj.objectType ?? "nebula") : makeDisc(obj.colorHex, obj.kind);
       mesh.userData.id = obj.id;
       this.objectMeshes.set(obj.id, mesh);
       this.root.add(mesh);
@@ -129,14 +150,56 @@ export class SkyRenderer {
     mesh.position.copy(p);
     const size = objectScale(obj, twilight);
     mesh.scale.set(size, size, 1);
-    mesh.visible = obj.kind !== "star" || obj.aboveHorizon;
+    mesh.visible = (obj.kind !== "star" && obj.kind !== "deepsky") || obj.aboveHorizon;
 
     const label = this.labels.get(obj.id);
     if (label) {
       label.position.copy(p).multiplyScalar(1.06);
-      label.visible = obj.kind !== "star" && obj.aboveHorizon;
+      label.visible = obj.kind !== "star" && obj.kind !== "deepsky" && obj.aboveHorizon;
       const selected = selectedId === obj.id;
       label.scale.set(selected ? 8 : 6, selected ? 2.4 : 1.8, 1);
+    }
+  }
+
+  private syncConstellations(): void {
+    const positions: number[] = [];
+    for (const constellation of CONSTELLATIONS) {
+      for (const ln of constellation.lines) {
+        const from = this.objectMeshes.get(ln.fromStarId);
+        const to = this.objectMeshes.get(ln.toStarId);
+        if (!from || !to || !from.visible || !to.visible) continue;
+        positions.push(from.position.x, from.position.y, from.position.z);
+        positions.push(to.position.x, to.position.y, to.position.z);
+      }
+    }
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+    if (!this.constellationLines) {
+      this.constellationLines = new THREE.LineSegments(
+        geom,
+        new THREE.LineBasicMaterial({ color: 0x7fa0c4, transparent: true, opacity: 0.4, depthWrite: false }),
+      );
+      this.scene.add(this.constellationLines);
+    } else {
+      this.constellationLines.geometry.dispose();
+      this.constellationLines.geometry = geom;
+    }
+    this.constellationLines.visible = this.showConstellations;
+
+    for (const constellation of CONSTELLATIONS) {
+      const anchor = this.objectMeshes.get(constellation.labelStarId);
+      let label = this.constellationLabels.get(constellation.id);
+      if (!label) {
+        label = makeLabel(constellation.name, 0.85);
+        label.material.opacity = 0.6;
+        label.userData.anchored = true;
+        this.constellationLabels.set(constellation.id, label);
+        this.scene.add(label);
+      }
+      if (anchor) {
+        label.position.copy(anchor.position).multiplyScalar(1.12);
+      }
+      label.visible = this.showConstellations && !!anchor && anchor.visible;
     }
   }
 
@@ -232,6 +295,20 @@ export class SkyRenderer {
     this.scene.add(sprite);
   }
 
+  /** Rejilla altazimutal tenue (círculos de altitud + meridianos de azimut): referencia visual
+   *  de "montura" para orientar un futuro telescopio real. */
+  private buildAltAzGrid(): void {
+    const material = new THREE.LineBasicMaterial({ color: 0x3a4048, transparent: true, opacity: 0.22 });
+    for (const alt of [30, 60]) {
+      const pts = Array.from({ length: 129 }, (_, i) => altAzToVector(alt, (i / 128) * 360, RADIUS));
+      this.scene.add(new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(pts), material));
+    }
+    for (let az = 0; az < 360; az += 30) {
+      const pts = Array.from({ length: 17 }, (_, i) => altAzToVector((i / 16) * 88, az, RADIUS));
+      this.scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), material));
+    }
+  }
+
   private bindInput(): void {
     const el = this.canvas;
     el.addEventListener("pointerdown", (e) => {
@@ -248,8 +325,9 @@ export class SkyRenderer {
       if (Math.abs(dx) + Math.abs(dy) > 2) this.dragged = true;
       this.lastX = e.clientX;
       this.lastY = e.clientY;
-      this.viewAz = (this.viewAz + dx * 0.18 + 360) % 360;
-      this.viewAlt = THREE.MathUtils.clamp(this.viewAlt + dy * 0.14, -8, 88);
+      const sensitivity = this.fov / 62;
+      this.viewAz = (this.viewAz + dx * 0.18 * sensitivity + 360) % 360;
+      this.viewAlt = THREE.MathUtils.clamp(this.viewAlt + dy * 0.14 * sensitivity, -8, 88);
     });
     const end = () => {
       this.dragging = false;
@@ -260,7 +338,8 @@ export class SkyRenderer {
       "wheel",
       (e) => {
         e.preventDefault();
-        this.fov = THREE.MathUtils.clamp(this.fov + Math.sign(e.deltaY) * 3.5, 24, 92);
+        const factor = e.deltaY < 0 ? 0.9 : 1 / 0.9;
+        this.fov = THREE.MathUtils.clamp(this.fov * factor, MIN_FOV, MAX_FOV);
         this.camera.fov = this.fov;
         this.camera.updateProjectionMatrix();
       },
@@ -311,6 +390,12 @@ function objectScale(obj: SkyObject, twilight: TwilightState): number {
   if (obj.kind === "sun") return twilight.condition === "day" ? 3.8 : 2.6;
   if (obj.kind === "moon") return 2.4;
   if (obj.kind === "star") return Math.max(0.35, 1.15 - obj.magnitude * 0.18);
+  if (obj.kind === "deepsky") {
+    const arcmin = Math.max(obj.angularSizeArcmin ?? 5, 3);
+    const rad = THREE.MathUtils.degToRad(arcmin / 60);
+    const diameter = 2 * RADIUS * Math.tan(rad / 2);
+    return THREE.MathUtils.clamp(diameter, 0.55, 3.2);
+  }
   return Math.max(0.7, 1.6 - Math.max(-2, obj.magnitude) * 0.12);
 }
 
@@ -328,6 +413,69 @@ function makeDisc(color: string, kind: SkyObject["kind"]): THREE.Sprite {
   ctx.beginPath();
   ctx.arc(64, 64, 60, 0, Math.PI * 2);
   ctx.fill();
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return new THREE.Sprite(
+    new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false, sizeAttenuation: true }),
+  );
+}
+
+/** Glifos convencionales de atlas para distinguir tipos de objeto de cielo profundo a simple vista. */
+function makeDeepSkySymbol(color: string, type: DeepSkyType): THREE.Sprite {
+  const canvas = document.createElement("canvas");
+  canvas.width = 128;
+  canvas.height = 128;
+  const ctx = canvas.getContext("2d")!;
+  const cx = 64;
+  const cy = 64;
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+  ctx.lineWidth = 4;
+  if (type === "galaxy") {
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(Math.PI / 5);
+    ctx.scale(1, 0.42);
+    ctx.globalAlpha = 0.85;
+    ctx.beginPath();
+    ctx.arc(0, 0, 46, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  } else if (type === "nebula") {
+    ctx.globalAlpha = 0.55;
+    ctx.setLineDash([6, 7]);
+    ctx.beginPath();
+    ctx.arc(cx, cy, 40, 0, Math.PI * 2);
+    ctx.stroke();
+  } else if (type === "planetary-nebula") {
+    ctx.globalAlpha = 0.8;
+    ctx.lineWidth = 9;
+    ctx.beginPath();
+    ctx.arc(cx, cy, 28, 0, Math.PI * 2);
+    ctx.stroke();
+  } else if (type === "globular-cluster") {
+    ctx.globalAlpha = 0.75;
+    ctx.beginPath();
+    ctx.arc(cx, cy, 32, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(cx - 44, cy);
+    ctx.lineTo(cx + 44, cy);
+    ctx.moveTo(cx, cy - 44);
+    ctx.lineTo(cx, cy + 44);
+    ctx.stroke();
+  } else {
+    ctx.globalAlpha = 0.5;
+    ctx.beginPath();
+    ctx.arc(cx, cy, 36, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+    for (const [dx, dy] of [[-14, -10], [10, -16], [16, 12], [-10, 16], [0, 0], [-20, 6], [18, -4]]) {
+      ctx.beginPath();
+      ctx.arc(cx + dx, cy + dy, 4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
   return new THREE.Sprite(

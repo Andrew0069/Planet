@@ -1,7 +1,10 @@
 import { PLANETS_DATA, PlanetData } from "../../data/planets.data";
 import { BRIGHT_STARS } from "../../data/brightStars.data";
+import { DEEP_SKY_OBJECTS, type DeepSkyType } from "../../data/deepSky.data";
 import { KeplerianEngine } from "./KeplerianEngine";
 import type { EvidenceKind } from "../scientific.types";
+
+export type ObserverSiteSource = "geolocation" | "manual" | "default";
 
 export interface ObserverSite {
   name: string;
@@ -9,6 +12,8 @@ export interface ObserverSite {
   longitudeDeg: number;
   elevationM: number;
   utcOffsetHours: number;
+  source?: ObserverSiteSource;
+  accuracyM?: number;
 }
 
 export const SANTA_TECLA: ObserverSite = {
@@ -19,7 +24,7 @@ export const SANTA_TECLA: ObserverSite = {
   utcOffsetHours: -6,
 };
 
-export type SkyObjectKind = "sun" | "moon" | "planet" | "star";
+export type SkyObjectKind = "sun" | "moon" | "planet" | "star" | "deepsky";
 
 export interface Vec3 {
   x: number;
@@ -45,6 +50,9 @@ export interface SkyObject {
   aboveHorizon: boolean;
   evidence: EvidenceKind;
   note?: string;
+  messier?: string;
+  objectType?: DeepSkyType;
+  angularSizeArcmin?: number;
 }
 
 export interface TwilightState {
@@ -94,21 +102,24 @@ export class SkyEngine {
   public static loadSite(): ObserverSite {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
-      if (!raw) return { ...SANTA_TECLA };
+      if (!raw) return { ...SANTA_TECLA, source: "default" };
       const parsed = JSON.parse(raw) as Partial<ObserverSite>;
       const lat = Number(parsed.latitudeDeg);
       const lon = Number(parsed.longitudeDeg);
       const elev = Number(parsed.elevationM);
       const utc = Number(parsed.utcOffsetHours);
+      const acc = Number(parsed.accuracyM);
       return {
         name: parsed.name?.trim() || SANTA_TECLA.name,
         latitudeDeg: Number.isFinite(lat) ? clamp(lat, -90, 90) : SANTA_TECLA.latitudeDeg,
         longitudeDeg: Number.isFinite(lon) ? clamp(lon, -180, 180) : SANTA_TECLA.longitudeDeg,
         elevationM: Number.isFinite(elev) ? elev : SANTA_TECLA.elevationM,
         utcOffsetHours: Number.isFinite(utc) ? utc : SANTA_TECLA.utcOffsetHours,
+        source: parsed.source === "geolocation" || parsed.source === "manual" ? parsed.source : "manual",
+        ...(Number.isFinite(acc) ? { accuracyM: acc } : {}),
       };
     } catch {
-      return { ...SANTA_TECLA };
+      return { ...SANTA_TECLA, source: "default" };
     }
   }
 
@@ -131,6 +142,15 @@ export class SkyEngine {
 
   public static lstDeg(date: Date, longitudeDeg: number): number {
     return wrap360(this.gmstDeg(date) + longitudeDeg);
+  }
+
+  /**
+   * Aproximación burda de huso horario a partir de la longitud (15°/hora), sin DST ni fronteras
+   * políticas. Solo se usa para presentar/leer el input datetime-local: `observe()` recibe
+   * siempre un Date en UTC real y no depende de este valor para ningún cálculo astronómico.
+   */
+  public static estimateUtcOffsetHours(longitudeDeg: number): number {
+    return clamp(Math.round(longitudeDeg / 15), -12, 14);
   }
 
   public static toLocalInputValue(date: Date, utcOffsetHours: number): string {
@@ -250,6 +270,32 @@ export class SkyEngine {
         aboveHorizon: horiz.altitudeDeg > 0,
         evidence: "observed",
         note: `${star.constellation} · ${star.spectralType} · catálogo J2000.`,
+      });
+    }
+
+    for (const deep of DEEP_SKY_OBJECTS) {
+      const horiz = this.equatorialToHorizontal(deep.raDeg, deep.decDeg, lstDeg, site.latitudeDeg);
+      objects.push({
+        id: deep.id,
+        name: deep.name,
+        kind: "deepsky",
+        colorHex: deep.colorHex,
+        raDeg: deep.raDeg,
+        decDeg: deep.decDeg,
+        altitudeDeg: horiz.altitudeDeg,
+        azimuthDeg: horiz.azimuthDeg,
+        distanceAU: deep.distanceLy * 63241.1,
+        elongationDeg: 0,
+        phase: 1,
+        phaseAngleDeg: 0,
+        angularSizeArcsec: deep.angularSizeArcmin * 60,
+        magnitude: deep.magnitude,
+        aboveHorizon: horiz.altitudeDeg > 0,
+        evidence: "observed",
+        note: `${deep.constellation} · catálogo ${deep.messier ?? deep.ngc ?? deep.id}.`,
+        messier: deep.messier,
+        objectType: deep.type,
+        angularSizeArcmin: deep.angularSizeArcmin,
       });
     }
 

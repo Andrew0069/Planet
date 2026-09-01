@@ -114,7 +114,9 @@ export class SceneManager {
     this.updateCameraPosition();
 
     // 3. Renderizador WebGL
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+    // logarithmicDepthBuffer: el ratio near/far de la cámara es 0.1/8000 (80,000:1); sin buffer
+    // logarítmico eso arriesga z-fighting en objetos lejanos (cinturón de Kuiper, nube de Oort).
+    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, logarithmicDepthBuffer: true });
     this.renderer.setSize(container.clientWidth || window.innerWidth, container.clientHeight || window.innerHeight);
     this.renderer.setPixelRatio(this.performanceSettings.pixelRatio);
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -137,7 +139,7 @@ export class SceneManager {
 
     // 5b. La luz del Sol proyecta sombras (mapa de 2048², alcance al sistema interior)
     this.sun.pointLight.castShadow = this.performanceSettings.shadowsEnabled;
-    this.sun.pointLight.shadow.mapSize.set(1024, 1024);
+    this.sun.pointLight.shadow.mapSize.set(2048, 2048);
     this.sun.pointLight.shadow.camera.near = 1.0;
     this.sun.pointLight.shadow.camera.far = 4000;
     // Obligatorio: sin esto la matriz de proyección de la sombra queda obsoleta

@@ -10,6 +10,8 @@ import { KerrEngine, KerrGeometry, KerrTrajectory } from '../core/relativity/Ker
 import { cloneSystemForLab, CURATED_SYSTEMS } from '../data/exoplanets.data';
 import { NasaExoplanetClient } from '../services/NasaExoplanetClient';
 import { NBodyWorkerClient } from '../services/NBodyWorkerClient';
+import { GeoError, GeolocationService, type GeoErrorReason } from '../services/GeolocationService';
+import { CONSTELLATIONS } from '../data/constellations.data';
 import {
   cardinalFromAzimuth,
   formatAzimuth,
@@ -62,6 +64,11 @@ export class WorkspaceController {
   private skyEventsKey = '';
   private skyEventsHtml = '';
   private lastObservation: SkyObservation | null = null;
+  private skyGeoAutoTried = false;
+  private skyGeoStatus: 'idle' | 'locating' | 'error' = 'idle';
+  private skyGeoMessage = '';
+  private skyShowConstellations = true;
+  private skySearchQuery = '';
 
   constructor(private readonly hooks: { onSelectBody?: (id: string | null) => void } = {}) {
     this.shell = requiredElement('science-workspace');
@@ -107,13 +114,18 @@ export class WorkspaceController {
     const observation = SkyEngine.observe(this.skySite, this.skyDate);
     this.lastObservation = observation;
     if (rebuild) {
-      this.content.innerHTML = skyShellHtml(this.skySite, this.skyDate, this.skyLive);
+      this.content.innerHTML = skyShellHtml(this.skySite, this.skyDate, this.skyLive, this.skyGeoStatus, this.skyGeoMessage);
       const canvas = requiredCanvas('sky-canvas');
       this.skyRenderer?.dispose();
       this.skyRenderer = new SkyRenderer(canvas);
       this.skyRenderer.onSelect = (id) => this.selectSkyObject(id);
+      this.skyRenderer.setConstellationsVisible(this.skyShowConstellations);
       this.bindSkyControls();
       this.skyDidFrame = false;
+      if (!this.skyGeoAutoTried && this.skySite.source === 'default') {
+        this.skyGeoAutoTried = true;
+        this.tryGeolocate(true);
+      }
     }
     this.paintSkyHud(observation);
     this.skyRenderer?.update(observation, this.skySelectedId);
@@ -178,25 +190,130 @@ export class WorkspaceController {
     requiredInput('sky-lat').addEventListener('change', () => this.commitSkySite());
     requiredInput('sky-lon').addEventListener('change', () => this.commitSkySite());
     requiredElement('sky-reset-site').addEventListener('click', () => {
-      this.skySite = { ...SANTA_TECLA };
+      this.skySite = { ...SANTA_TECLA, source: 'manual' };
       SkyEngine.saveSite(this.skySite);
+      this.skyGeoStatus = 'idle';
       this.skyDidFrame = false;
       this.renderSky(true);
     });
+    document.getElementById('sky-geo-btn')?.addEventListener('click', () => this.tryGeolocate(false));
+    requiredInput('sky-show-constellations').addEventListener('change', (event) => {
+      this.skyShowConstellations = (event.target as HTMLInputElement).checked;
+      this.skyRenderer?.setConstellationsVisible(this.skyShowConstellations);
+    });
+    requiredInput('sky-search').addEventListener('input', (event) => {
+      this.skySearchQuery = (event.target as HTMLInputElement).value.trim().toLowerCase();
+      this.renderSkySearchResults();
+    });
+  }
+
+  private renderSkySearchResults(): void {
+    const container = document.getElementById('sky-search-results');
+    if (!container) return;
+    if (!this.skySearchQuery) {
+      container.innerHTML = '';
+      container.classList.remove('visible');
+      return;
+    }
+    container.classList.add('visible');
+    const q = this.skySearchQuery;
+    const matches: { id: string; label: string; sub: string }[] = [];
+    for (const obj of this.lastObservation?.objects ?? []) {
+      const haystack = `${obj.name} ${obj.messier ?? ''}`.toLowerCase();
+      if (!haystack.includes(q)) continue;
+      const sub = obj.kind === 'deepsky'
+        ? `${obj.messier ?? 'Cielo profundo'} · ${obj.objectType ?? ''}`
+        : obj.kind === 'star' ? `Estrella · ${formatAzimuth(obj.azimuthDeg)}` : obj.kind;
+      matches.push({ id: obj.id, label: obj.name, sub });
+    }
+    for (const constellation of CONSTELLATIONS) {
+      if (!constellation.name.toLowerCase().includes(q) && !constellation.abbreviation.toLowerCase().includes(q)) continue;
+      matches.push({ id: `constellation:${constellation.id}`, label: constellation.name, sub: 'Constelación' });
+    }
+    container.innerHTML = matches.length
+      ? matches.slice(0, 12).map((m) => `<button class="sky-search-row" data-search-id="${escapeHtml(m.id)}" type="button"><strong>${escapeHtml(m.label)}</strong><small>${escapeHtml(m.sub)}</small></button>`).join('')
+      : '<p class="hint-copy">Sin resultados.</p>';
+    container.querySelectorAll<HTMLButtonElement>('[data-search-id]').forEach((button) => {
+      button.addEventListener('click', () => this.selectSearchResult(button.dataset.searchId ?? ''));
+    });
+  }
+
+  private selectSearchResult(id: string): void {
+    if (id.startsWith('constellation:')) {
+      const constellation = CONSTELLATIONS.find((item) => `constellation:${item.id}` === id);
+      if (!constellation) return;
+      const anchor = this.lastObservation?.objects.find((item) => item.id === constellation.labelStarId);
+      this.skyShowConstellations = true;
+      this.skyRenderer?.setConstellationsVisible(true);
+      const checkbox = document.getElementById('sky-show-constellations') as HTMLInputElement | null;
+      if (checkbox) checkbox.checked = true;
+      if (anchor) this.skyRenderer?.lookAt(anchor.azimuthDeg, anchor.altitudeDeg);
+      return;
+    }
+    this.selectSkyObject(id);
   }
 
   private commitSkySite(): void {
     const lat = Number(requiredInput('sky-lat').value);
     const lon = Number(requiredInput('sky-lon').value);
+    const latitudeDeg = Number.isFinite(lat) ? Math.min(90, Math.max(-90, lat)) : this.skySite.latitudeDeg;
+    const longitudeDeg = Number.isFinite(lon) ? Math.min(180, Math.max(-180, lon)) : this.skySite.longitudeDeg;
     this.skySite = {
       ...this.skySite,
-      latitudeDeg: Number.isFinite(lat) ? Math.min(90, Math.max(-90, lat)) : this.skySite.latitudeDeg,
-      longitudeDeg: Number.isFinite(lon) ? Math.min(180, Math.max(-180, lon)) : this.skySite.longitudeDeg,
+      latitudeDeg,
+      longitudeDeg,
+      name: 'Ubicación personalizada',
+      utcOffsetHours: SkyEngine.estimateUtcOffsetHours(longitudeDeg),
+      source: 'manual',
     };
     SkyEngine.saveSite(this.skySite);
     this.skyDidFrame = false;
     this.renderSky(false);
     this.syncSkyInputs();
+  }
+
+  private tryGeolocate(isAuto: boolean): void {
+    this.skyGeoStatus = 'locating';
+    this.skyGeoMessage = 'Buscando tu ubicación…';
+    this.updateGeoStatusUI();
+    GeolocationService.request()
+      .then((result) => {
+        this.skySite = {
+          ...this.skySite,
+          latitudeDeg: result.latitudeDeg,
+          longitudeDeg: result.longitudeDeg,
+          name: 'Mi ubicación',
+          utcOffsetHours: SkyEngine.estimateUtcOffsetHours(result.longitudeDeg),
+          source: 'geolocation',
+          ...(result.accuracyM != null ? { accuracyM: result.accuracyM } : {}),
+        };
+        SkyEngine.saveSite(this.skySite);
+        this.skyGeoStatus = 'idle';
+        this.skyGeoMessage = '';
+        this.skyDidFrame = false;
+        this.renderSky(true);
+        this.syncSkyInputs();
+      })
+      .catch((error: unknown) => {
+        const reason = error instanceof GeoError ? error.reason : 'unavailable';
+        this.skyGeoStatus = 'error';
+        this.skyGeoMessage = geoErrorMessage(reason, isAuto);
+        if (isAuto) {
+          this.skySite = { ...SANTA_TECLA, source: 'default' };
+          this.skyDidFrame = false;
+          this.renderSky(true);
+          return;
+        }
+        this.updateGeoStatusUI();
+      });
+  }
+
+  private updateGeoStatusUI(): void {
+    const el = document.getElementById('sky-geo-status');
+    if (!el) return;
+    el.textContent = this.skyGeoMessage;
+    el.classList.toggle('error', this.skyGeoStatus === 'error');
+    el.classList.toggle('visible', this.skyGeoStatus !== 'idle');
   }
 
   private syncSkyInputs(): void {
@@ -229,11 +346,14 @@ export class WorkspaceController {
     if (stamp) {
       stamp.textContent = `${observation.site.name} · ${SkyEngine.toLocalInputValue(observation.date, observation.site.utcOffsetHours).replace('T', ' ')} UTC${observation.site.utcOffsetHours >= 0 ? '+' : ''}${observation.site.utcOffsetHours}`;
     }
-    const bodies = observation.objects.filter((item) => item.kind !== 'star');
+    const bodies = observation.objects.filter((item) => item.kind !== 'star' && item.kind !== 'deepsky');
     const visibleStars = observation.objects.filter((item) => item.kind === 'star' && item.aboveHorizon).length;
     if (hint) {
-      hint.textContent = `${bodies.filter((item) => item.aboveHorizon).length} astros del sistema sobre el horizonte · ${visibleStars} estrellas brillantes · arrastra para mirar`;
+      const fov = this.skyRenderer?.getFovDeg();
+      const fovLabel = fov != null ? ` · campo ${fov >= 10 ? fov.toFixed(0) : fov.toFixed(1)}°` : '';
+      hint.textContent = `${bodies.filter((item) => item.aboveHorizon).length} astros del sistema sobre el horizonte · ${visibleStars} estrellas brillantes${fovLabel} · arrastra para mirar`;
     }
+    this.renderSkySearchResults();
     if (list) {
       list.innerHTML = bodies
         .slice()
@@ -709,7 +829,13 @@ export class WorkspaceController {
 
 }
 
-function skyShellHtml(site: ObserverSite, date: Date, live: boolean): string {
+function skyShellHtml(
+  site: ObserverSite,
+  date: Date,
+  live: boolean,
+  geoStatus: 'idle' | 'locating' | 'error' = 'idle',
+  geoMessage = '',
+): string {
   return `
     <section class="sky-layout">
       <div class="sky-stage">
@@ -737,11 +863,24 @@ function skyShellHtml(site: ObserverSite, date: Date, live: boolean): string {
           <label class="science-field"><span>Latitud</span><input id="sky-lat" type="number" step="0.0001" min="-90" max="90" value="${site.latitudeDeg}"></label>
           <label class="science-field"><span>Longitud</span><input id="sky-lon" type="number" step="0.0001" min="-180" max="180" value="${site.longitudeDeg}"></label>
         </div>
-        <button class="science-btn" id="sky-reset-site" type="button">Santa Tecla</button>
+        <div class="sky-site-actions">
+          <button class="science-btn" id="sky-geo-btn" type="button">📍 Mi ubicación</button>
+          <button class="science-btn" id="sky-reset-site" type="button">Santa Tecla</button>
+        </div>
+        <p class="sky-geo-status ${geoStatus === 'error' ? 'error' : ''} ${geoStatus !== 'idle' ? 'visible' : ''}" id="sky-geo-status">${escapeHtml(geoMessage)}</p>
         <div class="sky-meta">
           <div><span class="kicker">Condición</span><strong id="sky-twilight">—</strong></div>
           <div><span class="kicker">TSL</span><strong id="sky-lst">—</strong></div>
         </div>
+        <label class="science-field">
+          <span>Buscar estrella, Messier o constelación</span>
+          <input id="sky-search" type="search" placeholder="Ej. Orión, M31, Sirio…" autocomplete="off" />
+        </label>
+        <div class="sky-search-results" id="sky-search-results"></div>
+        <label class="sky-live">
+          <input id="sky-show-constellations" type="checkbox" checked />
+          <span>Mostrar constelaciones</span>
+        </label>
         <div class="section-title">Sistema solar esta noche</div>
         <div class="sky-object-list" id="sky-object-list"></div>
         <div class="sky-selected" id="sky-selected"></div>
@@ -759,7 +898,19 @@ function skyListRow(item: SkyObject, active: boolean): string {
 }
 
 function skyCardHtml(item: SkyObject, eventsHtml: string): string {
-  const kindLabel = item.kind === 'sun' ? 'Sol' : item.kind === 'moon' ? 'Luna' : item.kind === 'planet' ? 'Planeta' : 'Estrella';
+  const kindLabel = item.kind === 'sun' ? 'Sol'
+    : item.kind === 'moon' ? 'Luna'
+    : item.kind === 'planet' ? 'Planeta'
+    : item.kind === 'deepsky' ? deepSkyTypeLabel(item.objectType)
+    : 'Estrella';
+  const isPointLike = item.kind === 'star' || item.kind === 'deepsky';
+  const angularSize = item.kind === 'deepsky' && item.angularSizeArcmin
+    ? `${item.angularSizeArcmin >= 1 ? item.angularSizeArcmin.toFixed(1) + '′' : (item.angularSizeArcmin * 60).toFixed(0) + '″'}`
+    : item.angularSizeArcsec > 1 ? `${item.angularSizeArcsec.toFixed(0)}″` : '—';
+  const distance = item.kind === 'star' ? '—'
+    : item.kind === 'deepsky' ? `${formatLightYears(item.distanceAU / 63241.1)} años luz`
+    : item.distanceAU < 0.01 ? `${(item.distanceAU * 149597870.7).toFixed(0)} km`
+    : `${item.distanceAU.toFixed(3)} UA`;
   return `
     <div class="dossier-head compact">
       <div>
@@ -772,14 +923,31 @@ function skyCardHtml(item: SkyObject, eventsHtml: string): string {
       <span class="tele-k">Azimut</span><span class="tele-v">${formatAzimuth(item.azimuthDeg)} · ${cardinalFromAzimuth(item.azimuthDeg)}</span>
       <span class="tele-k">AR / Dec</span><span class="tele-v">${formatHours(item.raDeg / 15)} / ${item.decDeg.toFixed(1)}°</span>
       <span class="tele-k">Magnitud vis.</span><span class="tele-v">${item.magnitude.toFixed(2)}</span>
-      <span class="tele-k">Elongación</span><span class="tele-v">${item.kind === 'star' ? '—' : `${item.elongationDeg.toFixed(1)}°`}</span>
-      <span class="tele-k">Fase</span><span class="tele-v">${item.kind === 'star' || item.kind === 'sun' ? '—' : `${Math.round(item.phase * 100)}%`}</span>
-      <span class="tele-k">Tamaño ang.</span><span class="tele-v">${item.angularSizeArcsec > 1 ? `${item.angularSizeArcsec.toFixed(0)}″` : '—'}</span>
-      <span class="tele-k">Distancia</span><span class="tele-v">${item.kind === 'star' ? '—' : `${item.distanceAU < 0.01 ? (item.distanceAU * 149597870.7).toFixed(0) + ' km' : item.distanceAU.toFixed(3) + ' UA'}`}</span>
+      <span class="tele-k">Elongación</span><span class="tele-v">${isPointLike ? '—' : `${item.elongationDeg.toFixed(1)}°`}</span>
+      <span class="tele-k">Fase</span><span class="tele-v">${isPointLike || item.kind === 'sun' ? '—' : `${Math.round(item.phase * 100)}%`}</span>
+      <span class="tele-k">Tamaño ang.</span><span class="tele-v">${angularSize}</span>
+      <span class="tele-k">Distancia</span><span class="tele-v">${distance}</span>
     </div>
     ${eventsHtml}
     <p class="model-disclaimer">${escapeHtml(item.note ?? '')} Evidencia: ${evidenceLabel(item.evidence)}.</p>
   `;
+}
+
+function deepSkyTypeLabel(type: SkyObject['objectType']): string {
+  switch (type) {
+    case 'galaxy': return 'Galaxia';
+    case 'globular-cluster': return 'Cúmulo globular';
+    case 'open-cluster': return 'Cúmulo abierto';
+    case 'nebula': return 'Nebulosa';
+    case 'planetary-nebula': return 'Nebulosa planetaria';
+    default: return 'Cielo profundo';
+  }
+}
+
+function formatLightYears(ly: number): string {
+  if (ly >= 1_000_000) return `${(ly / 1_000_000).toFixed(2)} M`;
+  if (ly >= 1_000) return `${(ly / 1_000).toFixed(1)} mil`;
+  return ly.toFixed(0);
 }
 
 function skyEventsHtml(
@@ -797,6 +965,20 @@ function skyEventsHtml(
     <div><span class="kicker">Ocaso</span><strong>${fmt(events.set)}</strong></div>
     <p class="hint-copy">${status}</p>
   </div>`;
+}
+
+function geoErrorMessage(reason: GeoErrorReason, isAuto: boolean): string {
+  const suffix = isAuto ? ' · usando Santa Tecla.' : ' · se conserva la ubicación actual.';
+  switch (reason) {
+    case 'denied':
+      return `Permiso de ubicación denegado${suffix}`;
+    case 'timeout':
+      return `La ubicación tardó demasiado${suffix}`;
+    case 'unsupported':
+      return `Este dispositivo no ofrece geolocalización${suffix}`;
+    default:
+      return `No se pudo obtener tu ubicación${suffix}`;
+  }
 }
 
 function brightestAbove(objects: SkyObject[]): SkyObject | undefined {

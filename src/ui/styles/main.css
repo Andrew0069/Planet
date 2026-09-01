@@ -1263,6 +1263,27 @@ input[type="date"] {
   min-height: 36px;
 }
 
+.sky-site-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.sky-geo-status {
+  display: none;
+  font-size: 11px;
+  color: var(--txt-muted);
+  margin: 0;
+}
+
+.sky-geo-status.visible {
+  display: block;
+}
+
+.sky-geo-status.error {
+  color: var(--accent-red);
+}
+
 .sky-meta {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -1277,6 +1298,42 @@ input[type="date"] {
   margin-top: 2px;
   font-size: 14px;
   color: var(--txt-primary);
+}
+
+.sky-search-results {
+  display: none;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.sky-search-results.visible {
+  display: flex;
+}
+
+.sky-search-row {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+  color: var(--txt-primary);
+}
+
+.sky-search-row:hover {
+  border-color: var(--border-active);
+  background: rgba(236, 232, 224, 0.04);
+}
+
+.sky-search-row small {
+  color: var(--txt-muted);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .sky-object-list {

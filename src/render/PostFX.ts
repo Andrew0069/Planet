@@ -78,7 +78,10 @@ export class PostFX {
   private createComposer(): void {
     if (this.composer) return;
 
-    const composer = new EffectComposer(this.renderer);
+    // Render target multisample: sin esto, el antialias nativo del canvas solo cubre el blit
+    // final y los passes intermedios (bloom incluido) quedan con bordes con aliasing.
+    const renderTarget = new THREE.WebGLRenderTarget(this.width, this.height, { samples: 4 });
+    const composer = new EffectComposer(this.renderer, renderTarget);
     composer.setPixelRatio(this.pixelRatio);
     composer.setSize(this.width, this.height);
     composer.addPass(new RenderPass(this.scene, this.camera));
