@@ -19,6 +19,10 @@ export class PostFX {
   private height: number;
   private pixelRatio: number;
 
+  private static readonly BLOOM_STRENGTH = 0.34;
+  private static readonly BLOOM_RADIUS = 0.72;
+  private static readonly BLOOM_THRESHOLD = 1.0;
+
   constructor(
     renderer: THREE.WebGLRenderer,
     scene: THREE.Scene,
@@ -78,22 +82,36 @@ export class PostFX {
   private createComposer(): void {
     if (this.composer) return;
 
-    const composer = new EffectComposer(this.renderer);
+    // Buffer HDR (half float) con MSAA: el antialias del canvas no se aplica al
+    // renderizar a un render target, así que sin `samples` los bordes de planetas
+    // y anillos quedaban dentados con el bloom activo.
+    const gl = this.renderer.getContext();
+    const maxSamples = gl instanceof WebGL2RenderingContext ? gl.getParameter(gl.MAX_SAMPLES) as number : 0;
+    const target = new THREE.WebGLRenderTarget(
+      Math.max(1, Math.floor(this.width * this.pixelRatio)),
+      Math.max(1, Math.floor(this.height * this.pixelRatio)),
+      { type: THREE.HalfFloatType, samples: Math.min(4, maxSamples) }
+    );
+    const composer = new EffectComposer(this.renderer, target);
     composer.setPixelRatio(this.pixelRatio);
     composer.setSize(this.width, this.height);
     composer.addPass(new RenderPass(this.scene, this.camera));
 
+    // Bloom selectivo por umbral HDR: el pipeline es lineal hasta OutputPass, de
+    // modo que con umbral ≈ 1.0 solo florecen el disco solar (emite > 1) y los
+    // reflejos especulares intensos; los planetas iluminados no se lavan.
     const bloomResolution = new THREE.Vector2(
       Math.max(1, Math.floor(this.width / 2)),
       Math.max(1, Math.floor(this.height / 2))
     );
     const bloomPass = new UnrealBloomPass(
       bloomResolution,
-      0.55,
-      0.6,
-      0.82
+      PostFX.BLOOM_STRENGTH,
+      PostFX.BLOOM_RADIUS,
+      PostFX.BLOOM_THRESHOLD
     );
     composer.addPass(bloomPass);
+    // OutputPass: tone mapping ACES + conversión a sRGB, una sola vez al final
     composer.addPass(new OutputPass());
     this.composer = composer;
   }
