@@ -85,6 +85,29 @@ createMoonOrbitRings(celestialBodies);
   elementos keplerianos por luna (esfuerzo medio, reutiliza `KeplerianEngine`).
 - **Anillos de órbita por color de planeta**: color por cuerpo para distinguir sistemas.
 
+## 6. Calidad de render (sesión 2026-11)
+
+Pasada de calidad visual sobre `src/render/` (sin tocar física, datos ni tests):
+
+- **Luz de relleno** (`SceneManager`): ambiente frío tenue + direccional suave solidaria a la
+  cámara; el lado nocturno de los planetas ya no queda negro puro.
+- **PostFX**: buffer HDR half-float con MSAA ×4; bloom por umbral HDR (≈1.0) para que solo
+  florezca el disco solar; ACES + sRGB una sola vez en `OutputPass`. El modo rendimiento sigue
+  sin compositor (render directo con antialias del canvas).
+- **Sol** (`SunBody`): fotosfera procedural (granulación, manchas, oscurecimiento del limbo)
+  y corona/rayos como billboards de caída suave, en lugar de esferas aditivas saturadas.
+- **Atmósferas**: halo exterior + bruma Fresnel interior, ambos dependientes de la dirección
+  del Sol (origen de la escena).
+- **Anillos**: UV radiales, estructura fina, iluminación por dispersión (normal inclinada
+  hacia el Sol) y sombras anillo↔planeta analíticas en shader.
+- **Sombras**: el mapa cúbico solo se usa para eclipses de lunas sobre el planeta enfocado
+  (`CelestialBody.setShadowFocus`); los planetas ya no se eclipsan entre sí.
+- **Texturas**: sRGB + mipmaps + anisotropía máxima de la GPU (tope 16×) en todas las
+  texturas de color; mapa de rugosidad oceánica derivado de la textura de la Tierra.
+- **Fondo**: Vía Láctea desenfocada y atenuada como nebulosidad; estrellas procedurales con
+  distribución de magnitudes y color; puntos de Kuiper/Oort con disco suave.
+- Rugosidad de lunas heladas: `0.28` → `0.55` (sustituye el valor citado en la sección 2).
+
 ---
 
 *Verificación: `npm run build` ✅ (tsc + vite).*

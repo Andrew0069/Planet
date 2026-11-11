@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { CelestialBody } from './CelestialBody';
+import { configureColorTexture } from './catalogTextures';
 
 /**
  * MoonFX — Capa de mejora gráfica de las lunas.
@@ -364,13 +365,13 @@ export function applyMoonVisuals(bodies: CelestialBody[]): void {
 
       const material = entry.mesh.material as THREE.MeshStandardMaterial;
       const canvas = drawMoonTexture(moonData.name, moonData.colorHex);
-      const texture = new THREE.CanvasTexture(canvas);
+      const texture = configureColorTexture(new THREE.CanvasTexture(canvas));
       texture.wrapS = THREE.RepeatWrapping;
       texture.wrapT = THREE.ClampToEdgeWrapping;
-      texture.colorSpace = THREE.SRGBColorSpace;
 
       material.map = texture;
-      material.roughness = isIcyMoon(moonData.name) ? 0.28 : 0.85;
+      // Hielo algo más pulido que el regolito, sin llegar a un reflejo de espejo
+      material.roughness = isIcyMoon(moonData.name) ? 0.55 : 0.9;
       material.needsUpdate = true;
     });
   });

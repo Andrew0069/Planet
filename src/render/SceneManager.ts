@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { applyMilkyWaySky } from './catalogTextures';
+import { applyMilkyWaySky, setTextureAnisotropy } from './catalogTextures';
 import { PLANETS_DATA, PlanetData } from '../data/planets.data';
 import { GeographicLandmark } from '../data/geography.data';
 import { KeplerianEngine } from '../core/physics/KeplerianEngine';
@@ -87,6 +87,7 @@ export class SceneManager {
   private postFX: PostFX | null = null;
   private meteors: Meteors | null = null;
   private starfield: THREE.Points | null = null;
+  private softPointTexture: THREE.CanvasTexture | null = null;
   private lastElapsed = 0;
   private performanceSettings: ScenePerformanceSettings;
 
@@ -114,28 +115,46 @@ export class SceneManager {
     this.updateCameraPosition();
 
     // 3. Renderizador WebGL
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+    this.renderer = new THREE.WebGLRenderer({
+      antialias: true,
+      alpha: false,
+      powerPreference: 'high-performance'
+    });
     this.renderer.setSize(container.clientWidth || window.innerWidth, container.clientHeight || window.innerHeight);
     this.renderer.setPixelRatio(this.performanceSettings.pixelRatio);
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.05;
+    this.renderer.toneMappingExposure = 1.12;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
 
-    // 3b. Sombras reales (lunas proyectan sobre planetas, anillos sobre Saturno)
+    // 3b. Sombras: mapa cúbico para eclipses de lunas; las de anillos son analíticas
     this.renderer.shadowMap.enabled = this.performanceSettings.shadowsEnabled;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+    // 3c. Filtrado anisotrópico al máximo que soporte la GPU (tope 16×)
+    setTextureAnisotropy(this.renderer.capabilities.getMaxAnisotropy());
 
     container.appendChild(this.renderer.domElement);
 
     // 4. Iluminación ambiental
-    const ambientLight = new THREE.AmbientLight(0x1c1e24, 0.28);
+    // 4. Luz de relleno. Con solo la luz puntual del Sol el hemisferio nocturno
+    //    quedaba negro puro en los primeros planos. Se combina:
+    //    - un ambiente frío tenue (≈3 % de la luz solar: "luz de las estrellas"), y
+    //    - un relleno direccional suave solidario a la cámara (≈7 %), que da
+    //      volumen al lado nocturno sin aplanar el terminador ni proyectar sombras.
+    const ambientLight = new THREE.AmbientLight(0x93a7cc, 0.26);
     this.scene.add(ambientLight);
+
+    const fillLight = new THREE.DirectionalLight(0xa9bbdc, 0.24);
+    fillLight.position.set(0.35, 0.45, 1);
+    fillLight.target.position.set(0, 0, 0);
+    this.camera.add(fillLight, fillLight.target);
+    this.scene.add(this.camera);
 
     // 5. Sol
     this.sun = new SunBody(3.2);
     this.scene.add(this.sun.mesh);
 
-    // 5b. La luz del Sol proyecta sombras (mapa de 2048², alcance al sistema interior)
+    // 5b. La luz del Sol proyecta sombras (mapa cúbico de 1024² por cara)
     this.sun.pointLight.castShadow = this.performanceSettings.shadowsEnabled;
     this.sun.pointLight.shadow.mapSize.set(1024, 1024);
     this.sun.pointLight.shadow.camera.near = 1.0;
@@ -185,8 +204,8 @@ export class SceneManager {
     // 13. Nube de Oort (Esfera helada exterior distante)
     this.createOortCloud(2800);
 
-    // 14. Fondo de 3,500 estrellas
-    this.createStarfield(3500);
+    // 14. Fondo de estrellas nítidas con distribución de magnitudes
+    this.createStarfield(6000);
 
     // 14b. Estrellas fugaces ocasionales
     this.meteors = new Meteors(this.scene);
@@ -369,10 +388,12 @@ export class SceneManager {
     geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
 
     const mat = new THREE.PointsMaterial({
-      size: 1.4,
+      size: 1.6,
+      map: this.getSoftPointTexture(),
       vertexColors: true,
       transparent: true,
-      opacity: 0.65
+      opacity: 0.65,
+      depthWrite: false
     });
 
     const points = new THREE.Points(geo, mat);
@@ -404,15 +425,37 @@ export class SceneManager {
     geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
 
     const mat = new THREE.PointsMaterial({
-      size: 1.2,
+      size: 1.4,
+      map: this.getSoftPointTexture(),
       vertexColors: true,
       transparent: true,
-      opacity: 0.4
+      opacity: 0.4,
+      depthWrite: false
     });
 
     const points = new THREE.Points(geo, mat);
     this.oortCloudGroup.add(points);
     this.scene.add(this.oortCloudGroup);
+  }
+
+  /**
+   * Disco suave compartido para las nubes de puntos (Kuiper, Oort): sin textura,
+   * `PointsMaterial` dibuja cuadrados duros que se confundían con estrellas pixeladas.
+   */
+  private getSoftPointTexture(): THREE.CanvasTexture {
+    if (this.softPointTexture) return this.softPointTexture;
+    const canvas = document.createElement('canvas');
+    canvas.width = 64;
+    canvas.height = 64;
+    const ctx = canvas.getContext('2d')!;
+    const grad = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+    grad.addColorStop(0, 'rgba(255, 255, 255, 1)');
+    grad.addColorStop(0.35, 'rgba(255, 255, 255, 0.75)');
+    grad.addColorStop(1, 'rgba(255, 255, 255, 0)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, 64, 64);
+    this.softPointTexture = new THREE.CanvasTexture(canvas);
+    return this.softPointTexture;
   }
 
   private createStarfield(count: number): void {
@@ -421,9 +464,11 @@ export class SceneManager {
     const colors = new Float32Array(count * 3);
     const phases = new Float32Array(count);
     const speeds = new Float32Array(count);
+    const sizes = new Float32Array(count);
+    const tint = new THREE.Color();
 
     for (let i = 0; i < count; i++) {
-      const radius = 1200 + Math.random() * 2500;
+      const radius = 3000;
       const theta = Math.random() * Math.PI * 2;
       const phi = Math.acos(Math.random() * 2 - 1);
 
@@ -431,12 +476,20 @@ export class SceneManager {
       positions[i * 3 + 1] = radius * Math.sin(phi) * Math.sin(theta);
       positions[i * 3 + 2] = radius * Math.cos(phi);
 
-      // Temperatura de color ligera (blanco-azuladas a blanco-cálidas)
+      // Distribución de magnitudes: muchas estrellas débiles, pocas brillantes
+      const mag = Math.pow(Math.random(), 3.2);
+      sizes[i] = 1.3 + mag * 3.4;
+      const brightness = 0.22 + 0.78 * Math.pow(mag, 0.7);
+
+      // Color por clase espectral aproximada (azuladas ↔ anaranjadas)
       const warmth = Math.random();
-      const base = 0.78 + Math.random() * 0.22;
-      colors[i * 3] = base;
-      colors[i * 3 + 1] = base * (0.94 + warmth * 0.06);
-      colors[i * 3 + 2] = base * (0.92 + (1 - warmth) * 0.08);
+      if (warmth < 0.2) tint.setRGB(0.72, 0.82, 1.0);
+      else if (warmth < 0.7) tint.setRGB(1.0, 0.97, 0.92);
+      else if (warmth < 0.92) tint.setRGB(1.0, 0.86, 0.66);
+      else tint.setRGB(1.0, 0.7, 0.5);
+      colors[i * 3] = tint.r * brightness;
+      colors[i * 3 + 1] = tint.g * brightness;
+      colors[i * 3 + 2] = tint.b * brightness;
 
       phases[i] = Math.random() * Math.PI * 2;
       speeds[i] = 0.6 + Math.random() * 2.4;
@@ -446,39 +499,40 @@ export class SceneManager {
     geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
     geo.setAttribute('aPhase', new THREE.BufferAttribute(phases, 1));
     geo.setAttribute('aSpeed', new THREE.BufferAttribute(speeds, 1));
+    geo.setAttribute('aSize', new THREE.BufferAttribute(sizes, 1));
 
     const material = new THREE.ShaderMaterial({
       uniforms: {
         uTime: { value: 0 },
-        uSize: { value: 1.9 },
-        uScale: { value: Math.max(1, this.container.clientHeight) * 0.5 }
+        uScale: { value: this.starPointScale(this.container.clientHeight) }
       },
       vertexShader: `
         attribute vec3 color;
         attribute float aPhase;
         attribute float aSpeed;
+        attribute float aSize;
         uniform float uTime;
-        uniform float uSize;
         uniform float uScale;
         varying vec3 vColor;
-        varying float vTwinkle;
         void main() {
-          vColor = color;
-          vTwinkle = 0.7 + 0.3 * sin(uTime * aSpeed + aPhase);
+          float twinkle = 0.82 + 0.18 * sin(uTime * aSpeed + aPhase);
+          vColor = color * twinkle;
           vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
-          gl_PointSize = uSize * (uScale / -mvPosition.z);
+          // Tamaño en píxeles de pantalla (las estrellas están "en el infinito")
+          gl_PointSize = max(2.0, aSize * uScale * 1.5);
           gl_Position = projectionMatrix * mvPosition;
         }
       `,
       fragmentShader: `
         varying vec3 vColor;
-        varying float vTwinkle;
         void main() {
-          vec2 uv = gl_PointCoord - 0.5;
-          float d = length(uv);
-          if (d > 0.5) discard;
-          float alpha = smoothstep(0.5, 0.08, d);
-          gl_FragColor = vec4(vColor * vTwinkle, alpha * 0.9);
+          float d = length(gl_PointCoord - 0.5) * 2.0;
+          // Núcleo gaussiano + halo tenue: disco suave en lugar de un cuadrado
+          float core = exp(-d * d * 7.0);
+          float alpha = core * (1.0 - smoothstep(0.75, 1.0, d));
+          gl_FragColor = vec4(vColor * alpha, 1.0);
+          #include <tonemapping_fragment>
+          #include <colorspace_fragment>
         }
       `,
       transparent: true,
@@ -487,7 +541,14 @@ export class SceneManager {
     });
 
     this.starfield = new THREE.Points(geo, material);
+    this.starfield.frustumCulled = false;
     this.scene.add(this.starfield);
+  }
+
+  /** Escala de los puntos estelares: píxeles físicos, normalizada a 900 px de alto. */
+  private starPointScale(heightPx: number): number {
+    const resolutionScale = Math.min(1.6, Math.max(0.8, heightPx / 900));
+    return this.renderer.getPixelRatio() * resolutionScale;
   }
 
   private setupEventListeners(): void {
@@ -602,6 +663,9 @@ export class SceneManager {
       this.cutawayBody.setGeologyCutawayMode(false);
       this.cutawayBody = null;
     }
+    // Solo las lunas del sistema enfocado proyectan sombra (eclipses nítidos en
+    // primer plano, sin sombras cruzadas entre planetas en la vista general).
+    this.planets.forEach((body) => body.setShadowFocus(body === next));
     if (!planetId) {
       this.followedBody = null;
       this.cameraTarget.set(0, 0, 0);
@@ -708,11 +772,11 @@ export class SceneManager {
     this.renderer.setSize(width, height);
     this.postFX?.setSize(width, height);
     const material = this.starfield?.material as THREE.ShaderMaterial | undefined;
-    if (material?.uniforms?.uScale) material.uniforms.uScale.value = height * 0.5;
+    if (material?.uniforms?.uScale) material.uniforms.uScale.value = this.starPointScale(height);
   }
 
   public update(daysSinceJ2000: number, deltaDays: number, elapsedTime: number): void {
-    this.sun.animate(elapsedTime, this.camera);
+    this.sun.animate(elapsedTime);
 
     this.asteroidBeltGroup.rotation.y += deltaDays * 0.002;
     this.kuiperBeltGroup.rotation.y += deltaDays * 0.0004;

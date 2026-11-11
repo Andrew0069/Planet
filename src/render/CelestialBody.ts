@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { applyCatalogTexture, applyEarthClouds } from './catalogTextures';
+import { applyCatalogTexture, applyEarthClouds, configureColorTexture } from './catalogTextures';
 import { PlanetData, MoonData } from '../data/planets.data';
 import { GEOGRAPHIC_LANDMARKS, GeographicLandmark } from '../data/geography.data';
 import { InternalLayers } from './InternalLayers';
@@ -42,7 +42,7 @@ export class CelestialBody {
     this.group.add(this.axialTiltGroup);
 
     // 3. Generación de texturas de alta resolución fotorrealistas
-    const { surfaceTex, specularTex } = this.generatePhotorealisticTextures(data);
+    const { surfaceTex } = this.generatePhotorealisticTextures(data);
 
     // 4. Malla principal (Esfera o Elipsoide de Jacobi si es Haumea)
     const geometry = new THREE.SphereGeometry(this.sceneRadius, 64, 64);
@@ -50,24 +50,26 @@ export class CelestialBody {
       geometry.scale(1.4, 0.9, 1.15); // Deformación elipsoidal triaxial característica
     }
 
+    // Superficies difusas: las cimas de nubes de los gigantes no son especulares
+    // (antes roughness 0.4 producía un punto caliente blanco). El brillo oceánico
+    // de la Tierra lo aporta el mapa de rugosidad derivado de la textura NASA.
     const material = new THREE.MeshStandardMaterial({
       map: surfaceTex,
-      bumpScale: 0.05,
-      roughness: data.id === 'earth' ? 0.45 : (data.type === 'terrestrial' || data.type === 'dwarf' ? 0.85 : 0.4),
-      metalness: data.id === 'mercury' || data.id === 'ceres' ? 0.2 : 0.05
+      roughness: data.id === 'earth' ? 0.7 : (data.type === 'terrestrial' || data.type === 'dwarf' ? 0.9 : 0.82),
+      metalness: data.id === 'mercury' || data.id === 'ceres' ? 0.12 : 0.0
     });
-
-    if (specularTex && data.id === 'earth') {
-      material.roughnessMap = specularTex;
-    }
 
     this.planetMesh = new THREE.Mesh(geometry, material);
     this.axialTiltGroup.add(this.planetMesh);
     applyCatalogTexture(data.id, material);
 
-    // Sombras: el planeta recibe y proyecta (las lunas proyectan sobre él)
-    this.planetMesh.castShadow = true;
-    this.planetMesh.receiveShadow = true;
+    // Sombras: el planeta solo recibe eclipses de sus lunas, y únicamente mientras
+    // está enfocado (ver setShadowFocus). No proyecta: con las
+    // distancias comprimidas de la escena, la sombra de un planeta interior se
+    // ensanchaba hasta cubrir medio planeta exterior con un borde dentado, algo
+    // físicamente imposible. Su propio lado nocturno ya lo resuelve el término N·L.
+    this.planetMesh.castShadow = false;
+    this.planetMesh.receiveShadow = false;
 
     // 5. Capa de Nubes atmosférica independiente (Tierra)
     if (data.id === 'earth') {
@@ -76,15 +78,19 @@ export class CelestialBody {
       const cloudsMat = new THREE.MeshStandardMaterial({
         map: cloudsTex,
         transparent: true,
-        opacity: 0.85,
+        opacity: 0.9,
         blending: THREE.NormalBlending,
-        roughness: 0.9
+        roughness: 1.0,
+        metalness: 0.0,
+        depthWrite: false
       });
       this.cloudsMesh = new THREE.Mesh(cloudsGeo, cloudsMat);
       this.axialTiltGroup.add(this.cloudsMesh);
       applyEarthClouds(cloudsMat);
+      // La capa de nubes está a ras del planeta: recibir su sombra (mapa cúbico de
+      // baja resolución) solo generaba acné; el terminador ya lo da el término N·L.
       this.cloudsMesh.castShadow = false;
-      this.cloudsMesh.receiveShadow = true;
+      this.cloudsMesh.receiveShadow = false;
     }
 
     // 6. Resplandor Atmosférico (Shader Fresnel dependiente del ángulo de visión)
@@ -102,9 +108,12 @@ export class CelestialBody {
     if (data.ringSystem) {
       this.ringsMesh = this.createRingsMesh(this.sceneRadius, data.ringSystem);
       this.axialTiltGroup.add(this.ringsMesh);
-      // Los anillos proyectan sombra sobre el planeta y la reciben de las lunas
-      this.ringsMesh.castShadow = true;
-      this.ringsMesh.receiveShadow = true;
+      this.applyRingShadowToPlanet(material, this.ringsMesh, this.sceneRadius, data.ringSystem);
+      // Las sombras anillo↔planeta son analíticas (shader): nítidas a cualquier
+      // distancia, sin depender del mapa de sombras cúbico de baja resolución.
+      this.ringsMesh.castShadow = false;
+      this.ringsMesh.receiveShadow = false;
+      this.ringsMesh.renderOrder = 1;
     }
 
     // 8. Capas geológicas internas (Corte 3D)
@@ -145,9 +154,12 @@ export class CelestialBody {
   }
 
   /**
-   * Resplandor atmosférico con shader Fresnel: la intensidad del halo depende
-   * del ángulo entre la normal y la dirección de visión, creando un borde
-   * luminoso realista (estilo "rim glow") en lugar de una esfera aditiva plana.
+   * Atmósfera en dos capas, ambas dependientes de la posición del Sol (origen):
+   *  - Halo exterior (BackSide): se desvanece a cero en el borde de la capa y es
+   *    máximo en el limbo del planeta; brilla en el lado diurno y queda casi
+   *    apagado en el nocturno (antes era un anillo opaco uniforme).
+   *  - Bruma interior (FrontSide): dispersión Fresnel sobre el disco iluminado,
+   *    que además suaviza el terminador día/noche.
    * La densidad y el alcance escalan con la presión superficial del planeta.
    */
   private createAtmosphereGlow(
@@ -158,45 +170,84 @@ export class CelestialBody {
   ): THREE.Mesh {
     // Escala logarítmica: Tierra ~1 atm, Venus ~92 atm, gigantes ~100-1000 atm
     const pressureFactor = Math.min(1, Math.log10(1 + surfacePressureAtm) / Math.log10(93));
-    const radiusScale = 1 + 0.13 * pressureFactor;
-    const intensity = 0.22 + 0.9 * Math.sqrt(pressureFactor);
+    const radiusScale = 1.035 + 0.06 * pressureFactor;
+    const intensity = 0.5 + 0.22 * Math.sqrt(pressureFactor);
+    // Coseno (normal·vista) de la capa exterior justo en el limbo del planeta
+    const limbCos = Math.sqrt(1 - 1 / (radiusScale * radiusScale));
 
-    const geometry = new THREE.SphereGeometry(sceneRadius * radiusScale, 48, 48);
-    if (ellipsoid) geometry.scale(1.4, 0.9, 1.15);
+    const vertexShader = /* glsl */ `
+      varying vec3 vViewNormal;
+      varying vec3 vViewPos;
+      varying vec3 vWorldNormal;
+      varying vec3 vWorldPos;
+      void main() {
+        vec4 worldPos = modelMatrix * vec4(position, 1.0);
+        vWorldPos = worldPos.xyz;
+        vWorldNormal = normalize(mat3(modelMatrix) * normal);
+        vViewNormal = normalize(normalMatrix * normal);
+        vec4 mv = viewMatrix * worldPos;
+        vViewPos = mv.xyz;
+        gl_Position = projectionMatrix * mv;
+      }
+    `;
+    const fragmentShader = /* glsl */ `
+      varying vec3 vViewNormal;
+      varying vec3 vViewPos;
+      varying vec3 vWorldNormal;
+      varying vec3 vWorldPos;
+      uniform vec3 uGlowColor;
+      uniform float uIntensity;
+      uniform float uLimbCos;
+      void main() {
+        vec3 n = normalize(vViewNormal);
+        vec3 v = normalize(-vViewPos);
+        // El Sol está en el origen de la escena
+        float sunDot = dot(normalize(vWorldNormal), normalize(-vWorldPos));
+        float glow;
+        #ifdef ATMOSPHERE_HALO
+          float d = clamp(-dot(n, v) / uLimbCos, 0.0, 1.0);
+          float day = 0.05 + 0.95 * smoothstep(-0.45, 0.4, sunDot);
+          glow = pow(d, 2.6) * day;
+        #else
+          float fres = pow(1.0 - clamp(dot(n, v), 0.0, 1.0), 2.8);
+          float day = 0.03 + 0.97 * smoothstep(-0.25, 0.3, sunDot);
+          glow = fres * day * 0.85;
+        #endif
+        // Blanqueo leve hacia el limbo iluminado (dispersión múltiple)
+        vec3 col = mix(uGlowColor, vec3(1.0), 0.12 * glow);
+        gl_FragColor = vec4(col * glow * uIntensity, 1.0);
+        #include <tonemapping_fragment>
+        #include <colorspace_fragment>
+      }
+    `;
 
-    const material = new THREE.ShaderMaterial({
+    const makeMaterial = (halo: boolean): THREE.ShaderMaterial => new THREE.ShaderMaterial({
       uniforms: {
         uGlowColor: { value: new THREE.Color(colorHex) },
-        uPower: { value: 3.2 },
         uIntensity: { value: intensity },
-        uOpacity: { value: 0.85 }
+        uLimbCos: { value: limbCos }
       },
-      vertexShader: `
-        varying vec3 vNormal;
-        void main() {
-          vNormal = normalize(normalMatrix * normal);
-          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-        }
-      `,
-      fragmentShader: `
-        varying vec3 vNormal;
-        uniform vec3 uGlowColor;
-        uniform float uPower;
-        uniform float uIntensity;
-        uniform float uOpacity;
-        void main() {
-          // Borde luminoso: máximo cuando la normal es perpendicular a la vista
-          float rim = pow(max(0.0, 0.72 - dot(vNormal, vec3(0.0, 0.0, 1.0))), uPower);
-          gl_FragColor = vec4(uGlowColor * rim * uIntensity * uOpacity, rim * uIntensity * uOpacity);
-        }
-      `,
-      side: THREE.BackSide,
+      defines: halo ? { ATMOSPHERE_HALO: '' } : {},
+      vertexShader,
+      fragmentShader,
+      side: halo ? THREE.BackSide : THREE.FrontSide,
       blending: THREE.AdditiveBlending,
       transparent: true,
       depthWrite: false
     });
 
-    return new THREE.Mesh(geometry, material);
+    const haloGeo = new THREE.SphereGeometry(sceneRadius * radiusScale, 64, 48);
+    const hazeGeo = new THREE.SphereGeometry(sceneRadius * 1.02, 64, 48);
+    if (ellipsoid) {
+      haloGeo.scale(1.4, 0.9, 1.15);
+      hazeGeo.scale(1.4, 0.9, 1.15);
+    }
+
+    const halo = new THREE.Mesh(haloGeo, makeMaterial(true));
+    const haze = new THREE.Mesh(hazeGeo, makeMaterial(false));
+    haze.renderOrder = 2;
+    halo.add(haze);
+    return halo;
   }
 
   private createRingsMesh(
@@ -206,27 +257,48 @@ export class CelestialBody {
     const innerR = sceneRadius * ringData.innerRadiusRatio;
     const outerR = sceneRadius * ringData.outerRadiusRatio;
 
-    const ringGeo = new THREE.RingGeometry(innerR, outerR, 128);
+    const ringGeo = new THREE.RingGeometry(innerR, outerR, 192, 1);
+    // UV radial: u = 0 en el borde interior, 1 en el exterior (RingGeometry trae
+    // UV planares, con lo que el degradado cruzaba el anillo como rayas).
+    const pos = ringGeo.attributes.position;
+    const uv = ringGeo.attributes.uv;
+    for (let i = 0; i < pos.count; i++) {
+      const r = Math.hypot(pos.getX(i), pos.getY(i));
+      uv.setXY(i, (r - innerR) / (outerR - innerR), 0.5);
+    }
     ringGeo.rotateX(Math.PI / 2);
 
     const canvas = document.createElement('canvas');
-    canvas.width = 512;
-    canvas.height = 8;
+    canvas.width = 1024;
+    canvas.height = 4;
     const ctx = canvas.getContext('2d')!;
 
-    const grad = ctx.createLinearGradient(0, 0, 512, 0);
-    grad.addColorStop(0, 'rgba(180, 160, 120, 0.1)');
-    grad.addColorStop(0.2, 'rgba(210, 190, 140, 0.9)');
-    grad.addColorStop(0.58, 'rgba(230, 210, 160, 0.95)');
-    grad.addColorStop(0.64, 'rgba(10, 10, 10, 0.05)');
-    grad.addColorStop(0.72, 'rgba(200, 180, 130, 0.8)');
-    grad.addColorStop(0.92, 'rgba(190, 170, 120, 0.6)');
-    grad.addColorStop(1.0, 'rgba(100, 90, 70, 0.0)');
-
+    const grad = ctx.createLinearGradient(0, 0, canvas.width, 0);
+    grad.addColorStop(0, 'rgba(150, 135, 110, 0.0)');
+    grad.addColorStop(0.06, 'rgba(165, 150, 120, 0.28)');
+    grad.addColorStop(0.2, 'rgba(205, 188, 150, 0.7)');
+    grad.addColorStop(0.24, 'rgba(232, 216, 176, 0.95)');
+    grad.addColorStop(0.58, 'rgba(240, 224, 184, 0.98)');
+    grad.addColorStop(0.6, 'rgba(20, 18, 14, 0.04)');
+    grad.addColorStop(0.655, 'rgba(20, 18, 14, 0.04)');
+    grad.addColorStop(0.675, 'rgba(214, 198, 160, 0.85)');
+    grad.addColorStop(0.93, 'rgba(196, 180, 142, 0.7)');
+    grad.addColorStop(1.0, 'rgba(120, 108, 86, 0.0)');
     ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, 512, 8);
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    const ringTex = new THREE.CanvasTexture(canvas);
+    // Estructura fina de anillos menores (ringlets) y huecos estrechos
+    for (let i = 0; i < 150; i++) {
+      const x = Math.random() * canvas.width;
+      const wPx = 1 + Math.random() * 5;
+      ctx.fillStyle = Math.random() > 0.5
+        ? `rgba(255, 246, 222, ${0.05 + Math.random() * 0.14})`
+        : `rgba(24, 20, 14, ${0.06 + Math.random() * 0.22})`;
+      ctx.fillRect(x, 0, wPx, canvas.height);
+    }
+    ctx.clearRect(canvas.width * 0.905, 0, 5, canvas.height); // hueco tipo Encke
+
+    const ringTex = configureColorTexture(new THREE.CanvasTexture(canvas));
 
     const ringMat = new THREE.MeshStandardMaterial({
       map: ringTex,
@@ -234,10 +306,116 @@ export class CelestialBody {
       side: THREE.DoubleSide,
       transparent: true,
       opacity: ringData.opacity,
-      roughness: 0.6
+      roughness: 1.0,
+      metalness: 0.0
     });
 
+    // Los anillos son partículas que dispersan la luz en todas direcciones, no una
+    // lámina lambertiana: con la normal geométrica quedaban casi negros cuando el
+    // Sol incide rasante. Se inclina la normal de sombreado hacia el Sol (origen
+    // de la escena) para que ambas caras se iluminen de forma coherente con el
+    // planeta. La sombra del planeta sobre los anillos se calcula analíticamente
+    // (rayo fragmento→Sol contra la esfera del planeta): es nítida y evita el acné
+    // del mapa de sombras cúbico sobre una lámina con luz rasante.
+    ringMat.onBeforeCompile = (shader) => {
+      shader.uniforms.uPlanetRadius = { value: sceneRadius };
+      shader.vertexShader = shader.vertexShader
+        .replace('#include <common>', '#include <common>\nvarying vec3 vPlanetCenterView;')
+        .replace(
+          '#include <begin_vertex>',
+          '#include <begin_vertex>\nvPlanetCenterView = (modelViewMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;'
+        );
+      shader.fragmentShader = shader.fragmentShader
+        .replace(
+          '#include <common>',
+          '#include <common>\nvarying vec3 vPlanetCenterView;\nuniform float uPlanetRadius;'
+        )
+        .replace(
+          '#include <map_fragment>',
+          `#include <map_fragment>
+          {
+            vec3 fragView = -vViewPosition;
+            vec3 toSun = normalize(viewMatrix[3].xyz - fragView);
+            vec3 toCenter = vPlanetCenterView - fragView;
+            float along = dot(toCenter, toSun);
+            float miss = length(toCenter - along * toSun);
+            float lit = along > 0.0 ? smoothstep(uPlanetRadius * 0.96, uPlanetRadius * 1.04, miss) : 1.0;
+            diffuseColor.rgb *= mix(0.06, 1.0, lit);
+          }`
+        )
+        .replace(
+          '#include <normal_fragment_begin>',
+          `#include <normal_fragment_begin>
+          {
+            vec3 sunDirView = normalize(viewMatrix[3].xyz + vViewPosition);
+            float facing = dot(normal, sunDirView) < 0.0 ? -1.0 : 1.0;
+            normal = normalize(mix(normal * facing, sunDirView, 0.7));
+          }`
+        );
+    };
+
     return new THREE.Mesh(ringGeo, ringMat);
+  }
+
+  /**
+   * Sombra de los anillos sobre el globo, analítica: se traza el rayo
+   * fragmento→Sol (origen de la escena) contra el plano ecuatorial y se atenúa
+   * la luz según la opacidad del anillo en ese radio (se ve la división de Cassini).
+   */
+  private applyRingShadowToPlanet(
+    material: THREE.MeshStandardMaterial,
+    rings: THREE.Mesh,
+    sceneRadius: number,
+    ringData: { innerRadiusRatio: number; outerRadiusRatio: number; opacity: number }
+  ): void {
+    const ringMaterial = rings.material as THREE.MeshStandardMaterial;
+    material.onBeforeCompile = (shader) => {
+      shader.uniforms.uRingMap = { value: ringMaterial.map };
+      shader.uniforms.uRingInner = { value: sceneRadius * ringData.innerRadiusRatio };
+      shader.uniforms.uRingOuter = { value: sceneRadius * ringData.outerRadiusRatio };
+      shader.uniforms.uRingOpacity = { value: ringData.opacity };
+      shader.vertexShader = shader.vertexShader
+        .replace('#include <common>', '#include <common>\nvarying vec3 vRingCenterView;\nvarying vec3 vRingAxisView;')
+        .replace(
+          '#include <begin_vertex>',
+          `#include <begin_vertex>
+          vRingCenterView = (modelViewMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+          vRingAxisView = normalize(normalMatrix * vec3(0.0, 1.0, 0.0));`
+        );
+      shader.fragmentShader = shader.fragmentShader
+        .replace(
+          '#include <common>',
+          `#include <common>
+          varying vec3 vRingCenterView;
+          varying vec3 vRingAxisView;
+          uniform sampler2D uRingMap;
+          uniform float uRingInner;
+          uniform float uRingOuter;
+          uniform float uRingOpacity;`
+        )
+        .replace(
+          '#include <map_fragment>',
+          `#include <map_fragment>
+          {
+            vec3 fragView = -vViewPosition;
+            vec3 toSun = normalize(viewMatrix[3].xyz - fragView);
+            vec3 axis = normalize(vRingAxisView);
+            float denom = dot(toSun, axis);
+            // Solo en el hemisferio diurno: en el nocturno no hay luz solar que ocluir
+            if (abs(denom) > 1e-4 && dot(normalize(vNormal), toSun) > 0.0) {
+              float t = dot(vRingCenterView - fragView, axis) / denom;
+              if (t > 0.0) {
+                float r = length(fragView + toSun * t - vRingCenterView);
+                float u = (r - uRingInner) / (uRingOuter - uRingInner);
+                if (u > 0.0 && u < 1.0) {
+                  float occlusion = texture2D(uRingMap, vec2(u, 0.5)).a * uRingOpacity;
+                  diffuseColor.rgb *= 1.0 - 0.8 * occlusion;
+                }
+              }
+            }
+          }`
+        );
+    };
   }
 
   private createFloatingLabel(text: string): THREE.Sprite {
@@ -284,9 +462,9 @@ export class CelestialBody {
         ctx.fill();
       }
 
-      const moonTex = new THREE.CanvasTexture(canvas);
+      const moonTex = configureColorTexture(new THREE.CanvasTexture(canvas));
 
-      const moonGeo = new THREE.SphereGeometry(moonRadiusScene, 24, 24);
+      const moonGeo = new THREE.SphereGeometry(moonRadiusScene, 32, 24);
       const moonMat = new THREE.MeshStandardMaterial({
         map: moonTex,
         roughness: 0.85
@@ -297,9 +475,10 @@ export class CelestialBody {
       // Las lunas orbitan en el plano ecuatorial del planeta (grupo de inclinación axial),
       // como en el sistema real: las órbitas lunares están cerca del ecuador planetario.
       this.axialTiltGroup.add(moonMesh);
-      // Las lunas proyectan sombra sobre el planeta y la reciben del Sol
-      moonMesh.castShadow = true;
-      moonMesh.receiveShadow = true;
+      // Las lunas proyectan sombra sobre su planeta solo mientras el sistema está
+      // enfocado (ver setShadowFocus), para no eclipsar a otros planetas.
+      moonMesh.castShadow = false;
+      moonMesh.receiveShadow = false;
 
       this.moonMeshes.push({
         mesh: moonMesh,
@@ -343,12 +522,11 @@ export class CelestialBody {
     }
     ctx.stroke();
 
-    return new THREE.CanvasTexture(canvas);
+    return configureColorTexture(new THREE.CanvasTexture(canvas));
   }
 
   private generatePhotorealisticTextures(planet: PlanetData): {
     surfaceTex: THREE.CanvasTexture;
-    specularTex: THREE.CanvasTexture | null;
   } {
     const canvas = document.createElement('canvas');
     canvas.width = 2048;
@@ -357,8 +535,6 @@ export class CelestialBody {
 
     const w = canvas.width;
     const h = canvas.height;
-
-    let specularCanvas: HTMLCanvasElement | null = null;
 
     if (planet.id === 'earth') {
       const oceanGrad = ctx.createLinearGradient(0, 0, 0, h);
@@ -423,18 +599,6 @@ export class CelestialBody {
       ctx.fillStyle = '#f0f8ff'; // Polos
       ctx.fillRect(0, 0, w, h * 0.07);
       ctx.fillRect(0, h * 0.93, w, h * 0.07);
-
-      specularCanvas = document.createElement('canvas');
-      specularCanvas.width = 512;
-      specularCanvas.height = 256;
-      const sCtx = specularCanvas.getContext('2d')!;
-      sCtx.fillStyle = '#000000';
-      sCtx.fillRect(0, 0, 512, 256);
-      sCtx.fillStyle = '#ffffff';
-      sCtx.beginPath();
-      sCtx.ellipse(135, 110, 60, 70, 0.1, 0, Math.PI * 2);
-      sCtx.ellipse(320, 110, 110, 70, 0, 0, Math.PI * 2);
-      sCtx.fill();
     } else if (planet.id === 'mercury') {
       ctx.fillStyle = '#7a7674';
       ctx.fillRect(0, 0, w, h);
@@ -668,13 +832,11 @@ export class CelestialBody {
       ctx.fillRect(0, 0, w, h);
     }
 
-    const surfaceTex = new THREE.CanvasTexture(canvas);
+    const surfaceTex = configureColorTexture(new THREE.CanvasTexture(canvas));
     surfaceTex.wrapS = THREE.RepeatWrapping;
     surfaceTex.wrapT = THREE.ClampToEdgeWrapping;
 
-    const specularTex = specularCanvas ? new THREE.CanvasTexture(specularCanvas) : null;
-
-    return { surfaceTex, specularTex };
+    return { surfaceTex };
   }
 
   public update(deltaDays: number): void {
@@ -701,6 +863,18 @@ export class CelestialBody {
       // muestra la misma cara al planeta. El signo se invierte solo en órbitas retrógradas
       // (Tritón), que también están acopladas por marea a su planeta.
       moon.mesh.rotation.y = -moon.angle;
+    });
+  }
+
+  /**
+   * Activa las sombras del sistema enfocado: sus lunas proyectan y solo este
+   * planeta recibe (eclipses), de modo que la sombra de una luna no alcanza a
+   * otros cuerpos situados detrás en la escena de distancias comprimidas.
+   */
+  public setShadowFocus(enabled: boolean): void {
+    this.planetMesh.receiveShadow = enabled;
+    this.moonMeshes.forEach((moon) => {
+      moon.mesh.castShadow = enabled;
     });
   }
 
